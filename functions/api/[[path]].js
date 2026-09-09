@@ -27,6 +27,7 @@ const hex = b => [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).j
 const parseCookies = req => Object.fromEntries((req.headers.get('cookie')||'').split(';').map(v=>v.trim()).filter(Boolean).map(v=>{const i=v.indexOf('='); return [decodeURIComponent(v.slice(0,i)), decodeURIComponent(v.slice(i+1))]}));
 const cleanText = (v,n=5000) => String(v??'').replace(/\0/g,'').slice(0,n);
 const cleanSlug = v => cleanText(v,120).toLowerCase().trim().replace(/[^a-z0-9-_]+/g,'-').replace(/^-+|-+$/g,'');
+const youtubeIdFromUrl = value => { const v=String(value||'').trim(); const m=v.match(/(?:youtu\.be\/|youtube(?:-nocookie)?\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/|live\/))([A-Za-z0-9_-]{6,})/i)||v.match(/[?&]v=([A-Za-z0-9_-]{6,})/i); return m?m[1]:''; };
 const sanitizeHtml = v => cleanText(v,50000)
   .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,'')
   .replace(/<iframe\b[^>]*>[\s\S]*?<\/iframe>/gi,'')
@@ -80,7 +81,7 @@ async function route(req,env,url){
   if(!env.DB) return json({ok:false,error:'D1 binding DB is missing. Add a D1 binding named DB in Cloudflare.'},503);
   const p=url.pathname.replace(/^\/api\/?/,'').replace(/\/$/,'');
   const method=req.method.toUpperCase();
-  if(p==='status' && method==='GET') return json({ok:true,installed:await isInstalled(env),version:'0.1.0-hf1'});
+  if(p==='status' && method==='GET') return json({ok:true,installed:await isInstalled(env),version:'0.1.1'});
   if(p==='setup' && method==='POST'){
     if(await isInstalled(env)) return json({ok:false,error:'OneArtist Hub is already installed.'},409);
     const b=await body(req); if(!env.ONEARTIST_SETUP_KEY || b.setupKey!==env.ONEARTIST_SETUP_KEY) return json({ok:false,error:'Invalid setup key.'},403);
@@ -200,13 +201,73 @@ async function route(req,env,url){
   if(p==='admin/settings'&&(method==='PUT'||method==='POST')){ if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403); const b=await body(req); for(const [k,v] of Object.entries(b.settings||{}))await setSetting(env,cleanText(k,80),v); return json({ok:true,settings:await getSettings(env)}); }
   if(p==='admin/integrations'&&method==='POST'){ if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403); const b=await body(req), provider=cleanText(b.provider,40); if(!['paypal','dropbox'].includes(provider))return json({ok:false,error:'Unsupported provider.'},400); const data=provider==='paypal'?{clientId:cleanText(b.clientId,300),clientSecret:String(b.clientSecret||''),environment:b.environment==='live'?'live':'sandbox'}:{accessToken:String(b.accessToken||'')}; if((provider==='paypal'&&!data.clientSecret)||(provider==='dropbox'&&!data.accessToken))return json({ok:false,error:'Required secret missing.'},400); const e=await encrypt(env,data); await env.DB.prepare(`INSERT INTO integrations(provider,data_enc,updated_at) VALUES(?,?,?) ON CONFLICT(provider) DO UPDATE SET data_enc=excluded.data_enc,updated_at=excluded.updated_at`).bind(provider,e,now()).run(); return json({ok:true}); }
   if(p==='admin/integrations'&&method==='GET'){ const {results=[]}=await env.DB.prepare('SELECT provider,updated_at FROM integrations').all(); return json({ok:true,integrations:results}); }
+  if(p==='admin/youtube'&&method==='POST'){ if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403); const b=await body(req), youtubeId=youtubeIdFromUrl(b.url); if(!youtubeId)return json({ok:false,error:'Enter a valid YouTube video URL.'},400); const canonical=`https://www.youtube.com/watch?v=${youtubeId}`; let meta={}; try{const r=await fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(canonical)}&format=json`,{headers:{accept:'application/json'}}); if(r.ok)meta=await r.json()}catch{} return json({ok:true,youtubeId,title:cleanText(meta.title||'',250),author:cleanText(meta.author_name||'',250),thumbnail:cleanText(meta.thumbnail_url||`https://img.youtube.com/vi/${youtubeId}/hqdefault.jpg`,1000)}); }
   if(p==='admin/orders'&&method==='GET'){ const {results=[]}=await env.DB.prepare('SELECT id,public_id,customer_email,customer_name,currency,total,status,fulfillment_status,tracking_carrier,tracking_number,shipping_json,created_at FROM orders ORDER BY created_at DESC LIMIT 100').all(); return json({ok:true,orders:results.map(o=>({...o,shipping:(()=>{try{return JSON.parse(o.shipping_json||'{}')}catch{return {}}})()}))}); }
   const adminOrder=p.match(/^admin\/orders\/([^/]+)$/); if(adminOrder&&method==='PUT'){ if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403); const b=await body(req), status=['unfulfilled','processing','shipped','delivered','not_required'].includes(b.fulfillmentStatus)?b.fulfillmentStatus:'unfulfilled'; await env.DB.prepare('UPDATE orders SET fulfillment_status=?,tracking_carrier=?,tracking_number=?,updated_at=? WHERE id=?').bind(status,cleanText(b.trackingCarrier,80)||null,cleanText(b.trackingNumber,160)||null,now(),adminOrder[1]).run(); return json({ok:true}); }
   const cRoot=p==='admin/content'; const cId=p.match(/^admin\/content\/([^/]+)$/);
   if(cRoot&&method==='GET'){ const type=url.searchParams.get('type'); if(type&&!ALLOWED_TYPES.has(type))return json({ok:false,error:'Invalid type'},400); const q=type?await env.DB.prepare('SELECT * FROM content_items WHERE type=? ORDER BY COALESCE(sort_date,created_at) DESC').bind(type).all():await env.DB.prepare('SELECT * FROM content_items ORDER BY created_at DESC').all(); return json({ok:true,items:(q.results||[]).map(contentRow)}); }
-  if(cRoot&&method==='POST'){ if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403); const b=await body(req), type=cleanText(b.type,40); if(!ALLOWED_TYPES.has(type))return json({ok:false,error:'Invalid type'},400); const itemId=id(), t=now(), data={...(b.data||{})}; if(type==='page')data.html=sanitizeHtml(data.html||''); if(type==='video'&&data.youtubeUrl){const m=String(data.youtubeUrl).match(/(?:v=|youtu\.be\/|shorts\/)([A-Za-z0-9_-]{6,})/); if(m)data.youtubeId=m[1];} await env.DB.prepare(`INSERT INTO content_items(id,type,slug,title,status,sort_date,featured,data,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`).bind(itemId,type,cleanSlug(b.slug||b.title),cleanText(b.title,250),b.status==='draft'?'draft':'published',cleanText(b.sortDate||'',40)||null,b.featured?1:0,JSON.stringify(data),t,t).run(); return json({ok:true,id:itemId}); }
-  if(cId&&method==='PUT'){ if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403); const existing=contentRow(await env.DB.prepare('SELECT * FROM content_items WHERE id=?').bind(cId[1]).first()); if(!existing)return json({ok:false},404); const b=await body(req), data={...(b.data??existing.data)}; if(existing.type==='page')data.html=sanitizeHtml(data.html||''); if(existing.type==='video'&&data.youtubeUrl){const m=String(data.youtubeUrl).match(/(?:v=|youtu\.be\/|shorts\/)([A-Za-z0-9_-]{6,})/); if(m)data.youtubeId=m[1];} await env.DB.prepare(`UPDATE content_items SET slug=?,title=?,status=?,sort_date=?,featured=?,data=?,updated_at=? WHERE id=?`).bind(cleanSlug(b.slug??existing.slug),cleanText(b.title??existing.title,250),b.status==='draft'?'draft':'published',cleanText(b.sortDate??existing.sort_date??'',40)||null,b.featured?1:0,JSON.stringify(data),now(),cId[1]).run(); return json({ok:true}); }
-  if(cId&&method==='DELETE'){ if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403); await env.DB.prepare('DELETE FROM content_items WHERE id=?').bind(cId[1]).run(); return json({ok:true}); }
+  if(cRoot&&method==='POST'){
+    if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403);
+    const b=await body(req), type=cleanText(b.type,40), title=cleanText(b.title,250).trim();
+    if(!ALLOWED_TYPES.has(type))return json({ok:false,error:'Invalid content type.'},400);
+    if(!title)return json({ok:false,error:'Title is required.'},400);
+    const itemId=id(), t=now(), data={...(b.data||{})};
+    if(type==='page')data.html=sanitizeHtml(data.html||'');
+    if(type==='video'){
+      const yid=youtubeIdFromUrl(data.youtubeUrl);
+      if(!yid)return json({ok:false,error:'Invalid YouTube URL.'},400);
+      data.youtubeId=yid;
+      if(!data.thumbnail)data.thumbnail=`https://img.youtube.com/vi/${yid}/hqdefault.jpg`;
+    }
+    if(type==='track'){
+      const releaseId=cleanText(data.releaseId,100);
+      if(!releaseId)return json({ok:false,error:'A parent release is required.'},400);
+      const parent=await env.DB.prepare(`SELECT id FROM content_items WHERE id=? AND type='release'`).bind(releaseId).first();
+      if(!parent)return json({ok:false,error:'Selected release does not exist.'},400);
+      if(!cleanText(data.audio,1200))return json({ok:false,error:'Preview audio URL is required.'},400);
+      data.trackNo=Math.max(1,Math.floor(Number(data.trackNo)||1));
+    }
+    if(type==='product'){
+      const price=Number(data.price);
+      if(!Number.isFinite(price)||price<0)return json({ok:false,error:'Product price must be zero or greater.'},400);
+      data.price=money(price);
+      if(data.kind!=='digital')data.kind='physical';
+    }
+    await env.DB.prepare(`INSERT INTO content_items(id,type,slug,title,status,sort_date,featured,data,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`).bind(itemId,type,cleanSlug(b.slug||title),title,b.status==='draft'?'draft':'published',cleanText(b.sortDate||'',40)||null,b.featured?1:0,JSON.stringify(data),t,t).run();
+    return json({ok:true,id:itemId});
+  }
+  if(cId&&method==='PUT'){
+    if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403);
+    const existing=contentRow(await env.DB.prepare('SELECT * FROM content_items WHERE id=?').bind(cId[1]).first());
+    if(!existing)return json({ok:false,error:'Content item not found.'},404);
+    const b=await body(req), title=cleanText(b.title??existing.title,250).trim(), data={...(b.data??existing.data)};
+    if(!title)return json({ok:false,error:'Title is required.'},400);
+    if(existing.type==='page')data.html=sanitizeHtml(data.html||'');
+    if(existing.type==='video'){
+      const yid=youtubeIdFromUrl(data.youtubeUrl);
+      if(!yid)return json({ok:false,error:'Invalid YouTube URL.'},400);
+      data.youtubeId=yid;
+      if(!data.thumbnail)data.thumbnail=`https://img.youtube.com/vi/${yid}/hqdefault.jpg`;
+    }
+    if(existing.type==='track'){
+      const releaseId=cleanText(data.releaseId,100);
+      if(!releaseId)return json({ok:false,error:'A parent release is required.'},400);
+      const parent=await env.DB.prepare(`SELECT id FROM content_items WHERE id=? AND type='release'`).bind(releaseId).first();
+      if(!parent)return json({ok:false,error:'Selected release does not exist.'},400);
+      if(!cleanText(data.audio,1200))return json({ok:false,error:'Preview audio URL is required.'},400);
+      data.trackNo=Math.max(1,Math.floor(Number(data.trackNo)||1));
+    }
+    if(existing.type==='product'){
+      const price=Number(data.price);
+      if(!Number.isFinite(price)||price<0)return json({ok:false,error:'Product price must be zero or greater.'},400);
+      data.price=money(price);
+      if(data.kind!=='digital')data.kind='physical';
+    }
+    const nextStatus=(b.status??existing.status)==='draft'?'draft':'published', nextFeatured=(b.featured??existing.featured)?1:0;
+    await env.DB.prepare(`UPDATE content_items SET slug=?,title=?,status=?,sort_date=?,featured=?,data=?,updated_at=? WHERE id=?`).bind(cleanSlug(b.slug??existing.slug),title,nextStatus,cleanText(b.sortDate??existing.sort_date??'',40)||null,nextFeatured,JSON.stringify(data),now(),cId[1]).run();
+    return json({ok:true});
+  }
+  if(cId&&method==='DELETE'){ if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403); const existing=contentRow(await env.DB.prepare('SELECT * FROM content_items WHERE id=?').bind(cId[1]).first()); if(!existing)return json({ok:false,error:'Content item not found.'},404); if(existing.type==='release'){const q=await env.DB.prepare(`SELECT * FROM content_items WHERE type='track'`).all(); const linked=(q.results||[]).map(contentRow).filter(t=>t.data.releaseId===existing.id); if(linked.length)await env.DB.batch(linked.map(t=>env.DB.prepare('DELETE FROM content_items WHERE id=?').bind(t.id)));} await env.DB.prepare('DELETE FROM content_items WHERE id=?').bind(cId[1]).run(); return json({ok:true}); }
   return json({ok:false,error:'API route not found.'},404);
 }
 

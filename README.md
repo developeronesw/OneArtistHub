@@ -1,9 +1,9 @@
-# OneArtist Hub 0.1.0 FOUNDATION
+# OneArtist Hub 0.1.1 — Content Management
 
 **Official admin design:** Aurora Glass Studio  
 **Public themes:** Midnight Cinema, Artist OS, Neon Editorial
 
-OneArtist Hub is a responsive artist CMS, storefront, continuous music player and serverless backend. This first integrated testing release uses **Cloudflare Pages + Pages Functions + D1** for the recommended deployment profile. No PHP, MySQL or VPS is required for this profile.
+OneArtist Hub is a responsive artist CMS, storefront, continuous music player and serverless backend. This functional content-management release uses **Cloudflare Pages + Pages Functions + D1** for the recommended deployment profile. No PHP, MySQL or VPS is required for this profile.
 
 ## What is functional in this build
 
@@ -80,9 +80,9 @@ PayPal and Dropbox credentials are entered from the secure OneArtist Hub dashboa
 
 Leave **Load demo content** checked during first setup. The installer creates demo releases, preview tracks, one YouTube video, future tour dates, physical merch, a digital product and an About page. The preview WAV files and SVG artwork are included locally, so the player and play counter can be tested immediately.
 
-## Important FOUNDATION notes
+## Architecture notes
 
-This is the first integrated testing release. Cloudflare/D1 is the implemented backend adapter in 0.1.0. The API boundary intentionally keeps the public/admin React UI independent from D1 so additional MySQL/PostgreSQL/SQLite/self-hosted adapters can be added without rebuilding the themes.
+Cloudflare/D1 is the implemented backend adapter in the current release. The API boundary intentionally keeps the public/admin React UI independent from D1 so additional MySQL/PostgreSQL/SQLite/self-hosted adapters can be added without rebuilding the themes.
 
 PayPal and Dropbox require your own provider credentials before those external flows can be end-to-end tested. The rest of the CMS can be tested using the included demo data immediately after D1 installation.
 
@@ -100,4 +100,4 @@ Cloudflare Pages installs the package dependencies automatically during its Git 
 
 ## Version
 
-0.1.0 FOUNDATION — September 8, 2026
+0.1.1 Content Management — September 9, 2026

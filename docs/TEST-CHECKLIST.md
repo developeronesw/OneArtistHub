@@ -1,69 +1,107 @@
-# FOUNDATION Test Checklist
+# OneArtist Hub 0.1.1 Test Checklist
 
-## Deployment
-- [ ] GitHub repository root contains `package.json`, `index.html`, `functions/`, `src/`
-- [ ] Cloudflare build command is `npm run build`
-- [ ] Output directory is `dist`
-- [ ] D1 binding name is exactly `DB`
-- [ ] `ONEARTIST_SETUP_KEY` configured as a secret
-- [ ] `APP_ENCRYPTION_KEY` configured as a separate secret
-- [ ] Project redeployed after bindings/secrets
+## Deployment / upgrade
+- [ ] Existing D1 database is preserved
+- [ ] Existing Cloudflare secrets/bindings are preserved
+- [ ] Update ZIP is extracted into repository root with overwrite enabled
+- [ ] `npm run check` passes
+- [ ] `npm run build` passes
+- [ ] Git push triggers successful Cloudflare Pages deployment
+- [ ] `/api/status` returns version `0.1.1`
 
-## Setup/Auth
-- [ ] `/admin` opens setup before installation
-- [ ] Incorrect setup key is rejected
-- [ ] Correct setup creates admin and demo data
-- [ ] Setup cannot run a second time
-- [ ] Wrong password rejected
-- [ ] Correct username/password logs in
-- [ ] Logout invalidates admin session
+## Setup/Auth regression
+- [ ] Existing administrator can still log in
+- [ ] Logout invalidates administrator session
+- [ ] Existing analytics and demo/live content remain present
 
 ## Aurora Dashboard
 - [ ] Desktop sidebar usable
-- [ ] Tablet layout responsive
-- [ ] Mobile drawer/mobile dock usable
-- [ ] Revenue, Orders, Releases, Verified Plays, Downloads, Site Views render
-- [ ] 30-day verified engagement chart uses real D1 series and refreshes
-- [ ] No raster button/icon assets appear
+- [ ] Tablet/mobile drawer usable
+- [ ] Mobile bottom dock usable and More opens the full drawer
+- [ ] Revenue, Orders, Releases, Verified Plays, Downloads and Site Views render
+- [ ] 30-day verified engagement chart still uses live D1 data
+- [ ] New Release opens the release editor immediately
+- [ ] Add Video opens the video editor immediately
+- [ ] Add Tour Date opens the tour editor immediately
+- [ ] Create Page opens the page editor immediately
 
-## Content
-- [ ] Create/edit/delete release
-- [ ] Create/edit/delete track
-- [ ] YouTube URL generates thumbnail after save
-- [ ] Create/edit/delete tour date
-- [ ] Create/edit/delete physical product
-- [ ] Create/edit/delete digital product
-- [ ] Create custom page with HTML
-- [ ] `<script>` is removed from custom page HTML
-- [ ] Switch all three public themes
+## Releases CRUD
+- [ ] Create release and publish
+- [ ] Create release as draft
+- [ ] Edit title/type/date/cover/description/streaming links
+- [ ] Toggle published ↔ draft from list
+- [ ] Feature/unfeature release
+- [ ] Bulk delete selected releases
+- [ ] Deleting a release also removes its linked track records
 
-## Public site
-- [ ] Home automatically shows latest 3 releases
-- [ ] Home shows videos, merch and upcoming tours
-- [ ] Continuous player survives client-side route changes
-- [ ] Demo audio plays
-- [ ] Play counter increments after 10 seconds
-- [ ] YouTube video opens in modal
-- [ ] Page view counter records visits
-- [ ] Cart persists in localStorage
+## Tracks CRUD
+- [ ] Create track using release dropdown
+- [ ] Release dropdown shows existing releases
+- [ ] Save preview audio URL
+- [ ] Save track number/duration/cover/price/explicit flag
+- [ ] Edit track
+- [ ] Publish/draft track
+- [ ] Delete track
+- [ ] Continuous player can play newly created published preview
+- [ ] Play counter increments after verified listening threshold
 
-## PayPal / Orders
-- [ ] Sandbox credentials save
-- [ ] PayPal buttons appear in cart
-- [ ] Sandbox order creates and captures
-- [ ] Order appears in admin
-- [ ] Receipt page opens
-- [ ] Receipt can print/save as PDF
-- [ ] PayPal captured amount/currency matches the server checkout snapshot
-- [ ] Physical order exposes shipping address only inside authenticated Orders view
-- [ ] Fulfillment status, carrier and tracking can be saved
+## Videos CRUD
+- [ ] New Video accepts standard YouTube watch URL
+- [ ] New Video accepts youtu.be URL
+- [ ] New Video accepts Shorts URL
+- [ ] Fetch YouTube fills metadata when available
+- [ ] Thumbnail appears before save
+- [ ] Saved public card uses stored/derived YouTube thumbnail
+- [ ] Public click opens responsive YouTube modal
+- [ ] Video view counter records the modal open
+- [ ] Edit/delete video
 
-## Digital delivery
-- [ ] Dropbox token saves
-- [ ] Digital product has private Dropbox path
-- [ ] Paid digital order creates entitlement
-- [ ] Receipt Download button creates one-time token
-- [ ] Token streams file
-- [ ] Same token cannot be reused
-- [ ] Download counter increments
-- [ ] Download limit enforced
+## Tour CRUD
+- [ ] Create show with date, venue, location, ticket URL, status and time
+- [ ] Edit show
+- [ ] Draft/publish show
+- [ ] Delete show
+- [ ] Homepage shows only next 3 upcoming shows
+- [ ] Tour page shows all upcoming published shows
+
+## Store CRUD
+- [ ] Create physical product with price/inventory/SKU/variants
+- [ ] Create digital product with Dropbox private path
+- [ ] Edit product
+- [ ] Draft/publish product
+- [ ] Delete product
+- [ ] Homepage shows latest 4 products
+- [ ] Shop page shows full published catalog
+
+## Custom Pages
+- [ ] Create custom page
+- [ ] Page can be added/removed from public navigation
+- [ ] HTML saves and renders
+- [ ] `<script>` is stripped server-side
+- [ ] inline event handlers are stripped server-side
+- [ ] Edit/delete page
+
+## Themes
+- [ ] Midnight Cinema preview opens
+- [ ] Artist OS preview opens
+- [ ] Neon Editorial preview opens
+- [ ] Activate each theme from Admin → Themes
+- [ ] Activation changes public site without GitHub commit/redeploy
+- [ ] Existing releases/videos/tours/store/pages remain intact after each switch
+
+## Public catalog behavior
+- [ ] Homepage shows latest 3 releases
+- [ ] Homepage shows latest 3 videos
+- [ ] Homepage shows latest 3 upcoming tour dates
+- [ ] Homepage shows latest 4 products
+- [ ] Music page shows all published releases
+- [ ] Videos page shows all published videos
+- [ ] Shop page shows all published products
+- [ ] Continuous player survives client-side navigation
+
+## SVG / responsive contract
+- [ ] Built-in UI icons remain SVG paths
+- [ ] Built-in logo remains SVG
+- [ ] No raster UI icon/logo was introduced
+- [ ] Button icons remain vertically/horizontally centered
+- [ ] CRUD modals remain usable on phone/tablet/desktop
