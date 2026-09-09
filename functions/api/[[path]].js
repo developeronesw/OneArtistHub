@@ -36,7 +36,7 @@ async function body(req){ try{return await req.json()}catch{return {}} }
 async function sha(v){ return hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(v)))) }
 async function hashPassword(password,salt){
   const key = await crypto.subtle.importKey('raw',new TextEncoder().encode(password),'PBKDF2',false,['deriveBits']);
-  const out = await crypto.subtle.deriveBits({name:'PBKDF2',hash:'SHA-256',salt:new TextEncoder().encode(salt),iterations:210000},key,256);
+  const out = await crypto.subtle.deriveBits({name:'PBKDF2',hash:'SHA-256',salt:new TextEncoder().encode(salt),iterations:100000},key,256);
   return hex(out);
 }
 async function encKey(env){ const raw=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(env.APP_ENCRYPTION_KEY||'')); return crypto.subtle.importKey('raw',raw,'AES-GCM',false,['encrypt','decrypt']); }
@@ -80,7 +80,7 @@ async function route(req,env,url){
   if(!env.DB) return json({ok:false,error:'D1 binding DB is missing. Add a D1 binding named DB in Cloudflare.'},503);
   const p=url.pathname.replace(/^\/api\/?/,'').replace(/\/$/,'');
   const method=req.method.toUpperCase();
-  if(p==='status' && method==='GET') return json({ok:true,installed:await isInstalled(env),version:'0.1.0'});
+  if(p==='status' && method==='GET') return json({ok:true,installed:await isInstalled(env),version:'0.1.0-hf1'});
   if(p==='setup' && method==='POST'){
     if(await isInstalled(env)) return json({ok:false,error:'OneArtist Hub is already installed.'},409);
     const b=await body(req); if(!env.ONEARTIST_SETUP_KEY || b.setupKey!==env.ONEARTIST_SETUP_KEY) return json({ok:false,error:'Invalid setup key.'},403);
