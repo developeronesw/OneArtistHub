@@ -1,24 +1,29 @@
-# OneArtist Hub 0.1.1 — Content Management
+# OneArtist Hub 0.1.2 — Glass Player, Identity & Notifications
 
 **Official admin design:** Aurora Glass Studio  
 **Public themes:** Midnight Cinema, Artist OS, Neon Editorial
 
-OneArtist Hub is a responsive artist CMS, storefront, continuous music player and serverless backend. This functional content-management release uses **Cloudflare Pages + Pages Functions + D1** for the recommended deployment profile. No PHP, MySQL or VPS is required for this profile.
+OneArtist Hub is a responsive artist CMS, storefront, continuous music player and serverless backend. This premium communications release uses **Cloudflare Pages + Pages Functions + D1** for the recommended deployment profile. No PHP, MySQL or VPS is required for this profile.
 
 ## What is functional in this build
 
 - Browser-based first-run setup with a one-time setup key
-- Username/email/password administrator login
+- Username/email/password administrator login plus secure forgot-password email recovery
 - PBKDF2-SHA256 password hashing
 - HttpOnly + Secure + SameSite administrator sessions
 - Session-bound CSRF protection for admin writes
-- AES-GCM encrypted PayPal and Dropbox integration credentials
+- AES-GCM encrypted PayPal, Dropbox and transactional-email integration credentials
 - Aurora Glass Studio responsive dashboard
+- Aurora notification bell backed by D1 with sale, inventory and security events
+- Resend transactional email adapter, test-email tool and configurable sender identity
+- Customer purchase receipt/download emails and artist new-sale emails
+- Customer shipping/tracking emails when fulfillment is updated
+- Administrator password change, administrator email change and old-session invalidation
 - Real D1-backed counters for verified audio plays, page/site views and protected downloads
 - D1-backed revenue/order/release dashboard metrics plus real 30-day verified engagement series
 - CRUD for releases, tracks, YouTube videos, tour dates, products, custom pages and media URLs
 - Three switchable public themes
-- Persistent continuous music player
+- OneMusicPlayer-inspired floating glass SaaS continuous player with responsive mobile full-player, queue, shuffle, repeat, favorites and volume
 - Play counting after 10 seconds of real preview playback
 - Page-view deduplication by visitor and day
 - Audio/video analytics deduplication by visitor and hour
@@ -74,7 +79,7 @@ See `docs/CLOUDFLARE-SETUP.md` for the browser-only walkthrough.
 - `APP_ENCRYPTION_KEY`
 - future private API credentials
 
-PayPal and Dropbox credentials are entered from the secure OneArtist Hub dashboard after installation and encrypted before being written to D1.
+PayPal, Dropbox and email-provider credentials are entered from the secure OneArtist Hub dashboard after installation and encrypted before being written to D1.
 
 ## Demo data
 
@@ -98,6 +103,10 @@ npm run build
 
 Cloudflare Pages installs the package dependencies automatically during its Git build, then `npm run build` produces `dist/` with Vite.
 
+## Email notifications
+
+OneArtist Hub 0.1.2 supports Resend through the server-side REST API. Configure it under **Settings → Email & Sales Notifications** using a sending API key and a verified sender address. Forgot-password recovery depends on a working email integration.
+
 ## Version
 
-0.1.1 Content Management — September 9, 2026
+0.1.2 Glass Player, Identity & Notifications — September 9, 2026

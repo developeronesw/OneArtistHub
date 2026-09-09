@@ -1,9 +1,9 @@
 {
   "name": "oneartist-hub",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
-  "description": "OneArtist Hub 0.1.1 \u2014 functional content management release",
+  "description": "OneArtist Hub 0.1.2 \u2014 Glass Player, Identity & Notifications",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

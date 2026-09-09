@@ -31,6 +31,14 @@ if(!/function Themes\(/.test(app)||!/publicTheme/.test(app)||!/themePreview/.tes
 if(!/admin\/youtube/.test(api)||!/youtubeIdFromUrl/.test(api)||!/Fetch YouTube/.test(app)){console.error('FAIL YouTube CRUD/thumbnail flow');fail=true}else console.log('PASS YouTube CRUD/thumbnail flow');
 if(!/bulkDelete/.test(app)||!/toggleStatus/.test(app)){console.error('FAIL content bulk/status controls');fail=true}else console.log('PASS content bulk/status controls');
 if(!/create\('release'\)/.test(app)||!/create\('video'\)/.test(app)||!/create\('tour'\)/.test(app)){console.error('FAIL dashboard quick-create actions');fail=true}else console.log('PASS dashboard quick-create actions');
+
+if(!/Glass Player|glass-player|player-expanded/.test(app)||!/function Player\(/.test(app)){console.error('FAIL glass SaaS player UI');fail=true}else console.log('PASS glass SaaS player UI');
+if(!/auth\/forgot-password/.test(api)||!/auth\/reset-password/.test(api)||!/password_reset_tokens/.test(api)){console.error('FAIL forgot/reset password flow');fail=true}else console.log('PASS forgot/reset password flow');
+if(!/admin\/notifications/.test(api)||!/notification_preferences/.test(api)||!/notification-popover/.test(css)){console.error('FAIL D1 notifications center');fail=true}else console.log('PASS D1 notifications center');
+if(!/api.resend.com\/emails/.test(api)||!/admin\/email\/test/.test(api)||!/Email & Sales Notifications/.test(app)){console.error('FAIL transactional email integration');fail=true}else console.log('PASS transactional email integration');
+if(!/MIGRATION_012/.test(api)||!/ensureUpgrade012/.test(api)){console.error('FAIL automatic 0.1.2 migration');fail=true}else console.log('PASS automatic 0.1.2 migration');
+if(!/version:'0.1.2'/.test(api)||pkg.version!=='0.1.2'){console.error('FAIL 0.1.2 version markers');fail=true}else console.log('PASS 0.1.2 version markers');
+
 const pbkdf2Iterations=Number((api.match(/iterations:(\d+)/)||[])[1]||0);
 if(!pbkdf2Iterations||pbkdf2Iterations>100000){console.error('FAIL Cloudflare PBKDF2 iteration limit',pbkdf2Iterations);fail=true}else console.log('PASS Cloudflare PBKDF2 iteration limit',pbkdf2Iterations);
 

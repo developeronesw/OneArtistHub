@@ -15,7 +15,28 @@ CREATE TABLE IF NOT EXISTS orders (id TEXT PRIMARY KEY, public_id TEXT NOT NULL 
 CREATE INDEX IF NOT EXISTS idx_orders_created ON orders(created_at DESC);
 CREATE TABLE IF NOT EXISTS order_items (id INTEGER PRIMARY KEY AUTOINCREMENT, order_id TEXT NOT NULL, product_id TEXT NOT NULL, title TEXT NOT NULL, quantity INTEGER NOT NULL, unit_price REAL NOT NULL, kind TEXT NOT NULL, data TEXT NOT NULL DEFAULT '{}', FOREIGN KEY(order_id) REFERENCES orders(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS entitlements (id TEXT PRIMARY KEY, order_id TEXT NOT NULL, product_id TEXT NOT NULL, customer_email TEXT NOT NULL, downloads_used INTEGER NOT NULL DEFAULT 0, downloads_max INTEGER NOT NULL DEFAULT 5, created_at TEXT NOT NULL, FOREIGN KEY(order_id) REFERENCES orders(id) ON DELETE CASCADE);
-CREATE TABLE IF NOT EXISTS download_tokens (token_hash TEXT PRIMARY KEY, entitlement_id TEXT NOT NULL, expires_at TEXT NOT NULL, used_at TEXT, FOREIGN KEY(entitlement_id) REFERENCES entitlements(id) ON DELETE CASCADE);`;
+CREATE TABLE IF NOT EXISTS download_tokens (token_hash TEXT PRIMARY KEY, entitlement_id TEXT NOT NULL, expires_at TEXT NOT NULL, used_at TEXT, FOREIGN KEY(entitlement_id) REFERENCES entitlements(id) ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS password_reset_tokens (token_hash TEXT PRIMARY KEY, admin_id INTEGER NOT NULL, expires_at TEXT NOT NULL, used_at TEXT, created_at TEXT NOT NULL, FOREIGN KEY(admin_id) REFERENCES admins(id) ON DELETE CASCADE);
+CREATE INDEX IF NOT EXISTS idx_password_reset_admin ON password_reset_tokens(admin_id,created_at DESC);
+CREATE TABLE IF NOT EXISTS notifications (id TEXT PRIMARY KEY, type TEXT NOT NULL, title TEXT NOT NULL, message TEXT NOT NULL, link TEXT, is_read INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_notifications_created ON notifications(created_at DESC);
+CREATE TABLE IF NOT EXISTS notification_preferences (id INTEGER PRIMARY KEY CHECK(id=1), new_order INTEGER NOT NULL DEFAULT 1, digital_sale INTEGER NOT NULL DEFAULT 1, physical_sale INTEGER NOT NULL DEFAULT 1, shipping_updates INTEGER NOT NULL DEFAULT 1, security_alerts INTEGER NOT NULL DEFAULT 1, low_inventory INTEGER NOT NULL DEFAULT 1, low_inventory_threshold INTEGER NOT NULL DEFAULT 5, updated_at TEXT NOT NULL);
+INSERT OR IGNORE INTO notification_preferences(id,updated_at) VALUES(1,datetime('now'));
+CREATE TABLE IF NOT EXISTS email_log (id TEXT PRIMARY KEY, recipient TEXT NOT NULL, template TEXT NOT NULL, subject TEXT NOT NULL, status TEXT NOT NULL, provider TEXT, provider_message_id TEXT, error TEXT, created_at TEXT NOT NULL, sent_at TEXT);
+CREATE INDEX IF NOT EXISTS idx_email_log_created ON email_log(created_at DESC);`;
+
+const MIGRATION_012 = `
+CREATE TABLE IF NOT EXISTS password_reset_tokens (token_hash TEXT PRIMARY KEY, admin_id INTEGER NOT NULL, expires_at TEXT NOT NULL, used_at TEXT, created_at TEXT NOT NULL, FOREIGN KEY(admin_id) REFERENCES admins(id) ON DELETE CASCADE);
+CREATE INDEX IF NOT EXISTS idx_password_reset_admin ON password_reset_tokens(admin_id,created_at DESC);
+CREATE TABLE IF NOT EXISTS notifications (id TEXT PRIMARY KEY, type TEXT NOT NULL, title TEXT NOT NULL, message TEXT NOT NULL, link TEXT, is_read INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_notifications_created ON notifications(created_at DESC);
+CREATE TABLE IF NOT EXISTS notification_preferences (id INTEGER PRIMARY KEY CHECK(id=1), new_order INTEGER NOT NULL DEFAULT 1, digital_sale INTEGER NOT NULL DEFAULT 1, physical_sale INTEGER NOT NULL DEFAULT 1, shipping_updates INTEGER NOT NULL DEFAULT 1, security_alerts INTEGER NOT NULL DEFAULT 1, low_inventory INTEGER NOT NULL DEFAULT 1, low_inventory_threshold INTEGER NOT NULL DEFAULT 5, updated_at TEXT NOT NULL);
+INSERT OR IGNORE INTO notification_preferences(id,updated_at) VALUES(1,datetime('now'));
+CREATE TABLE IF NOT EXISTS email_log (id TEXT PRIMARY KEY, recipient TEXT NOT NULL, template TEXT NOT NULL, subject TEXT NOT NULL, status TEXT NOT NULL, provider TEXT, provider_message_id TEXT, error TEXT, created_at TEXT NOT NULL, sent_at TEXT);
+CREATE INDEX IF NOT EXISTS idx_email_log_created ON email_log(created_at DESC);`;
+let upgrade012Ready=false;
+async function ensureUpgrade012(env){ if(upgrade012Ready)return; await env.DB.exec(MIGRATION_012); upgrade012Ready=true; }
+
 
 const ALLOWED_TYPES = new Set(['release','track','video','tour','product','page','media','news']);
 const json = (data, status=200, extra={}) => new Response(JSON.stringify(data), {status, headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...extra}});
@@ -60,6 +81,40 @@ async function recordAnalytics(req,env,eventType,objectType,objectId){
   const vh=await visitorHash(req), bucket=bucketFor(eventType);
   await env.DB.prepare(`INSERT OR IGNORE INTO analytics(event_type,object_type,object_id,visitor_hash,bucket,value,created_at) VALUES(?,?,?,?,?,1,?)`).bind(eventType,objectType,objectId,vh,bucket,now()).run();
 }
+
+const htmlEscape=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+async function emailConfig(env){ const r=await env.DB.prepare(`SELECT data_enc FROM integrations WHERE provider='email'`).first(); return r?decrypt(env,r.data_enc):null; }
+async function notificationPrefs(env){ const r=await env.DB.prepare('SELECT * FROM notification_preferences WHERE id=1').first(); return r||{new_order:1,digital_sale:1,physical_sale:1,shipping_updates:1,security_alerts:1,low_inventory:1,low_inventory_threshold:5}; }
+async function createNotification(env,type,title,message,link=''){ await env.DB.prepare('INSERT INTO notifications(id,type,title,message,link,is_read,created_at) VALUES(?,?,?,?,?,0,?)').bind(id(),cleanText(type,40),cleanText(title,180),cleanText(message,1200),cleanText(link,80)||null,now()).run(); }
+async function sendEmail(env,{to,subject,html,text='',template='generic'}){
+  const cfg=await emailConfig(env); if(!cfg?.apiKey||!cfg?.fromEmail) return {ok:false,skipped:true,error:'Email provider is not configured.'};
+  const logId=id(), created=now(), provider=cfg.service||'resend';
+  try{
+    if(provider!=='resend') throw new Error('Unsupported email service.');
+    const from=cfg.fromName?`${cleanText(cfg.fromName,120)} <${cleanText(cfg.fromEmail,220)}>`:cleanText(cfg.fromEmail,220);
+    const payload={from,to:[cleanText(to,220)],subject:cleanText(subject,300),html:String(html||''),text:cleanText(text,10000)};
+    if(cfg.replyTo) payload.reply_to=cleanText(cfg.replyTo,220);
+    const r=await fetch('https://api.resend.com/emails',{method:'POST',headers:{authorization:`Bearer ${cfg.apiKey}`,'content-type':'application/json'},body:JSON.stringify(payload)});
+    let j={}; try{j=await r.json()}catch{}
+    if(!r.ok) throw new Error(cleanText(j.message||j.error||`Email provider returned ${r.status}`,500));
+    await env.DB.prepare('INSERT INTO email_log(id,recipient,template,subject,status,provider,provider_message_id,error,created_at,sent_at) VALUES(?,?,?,?,?,?,?,?,?,?)').bind(logId,cleanText(to,220),template,cleanText(subject,300),'sent',provider,cleanText(j.id||'',160)||null,null,created,now()).run();
+    return {ok:true,id:j.id||''};
+  }catch(err){
+    await env.DB.prepare('INSERT INTO email_log(id,recipient,template,subject,status,provider,provider_message_id,error,created_at,sent_at) VALUES(?,?,?,?,?,?,?,?,?,?)').bind(logId,cleanText(to,220),template,cleanText(subject,300),'failed',provider,null,cleanText(err?.message||err,800),created,null).run();
+    console.error('OneArtist email error',err); return {ok:false,error:String(err?.message||err)};
+  }
+}
+async function emailShell(env,title,content){ const settings=await getSettings(env), artist=htmlEscape(settings.artist?.name||settings.site?.title||'OneArtist Hub'), accent=htmlEscape(settings.site?.accent||'#b45cff'); return `<!doctype html><html><body style="margin:0;background:#070812;color:#eef1ff;font-family:Arial,sans-serif"><div style="max-width:640px;margin:0 auto;padding:30px 18px"><div style="padding:26px;border:1px solid #282b45;border-radius:18px;background:#0d0f1d"><div style="font-size:13px;letter-spacing:.14em;color:${accent};text-transform:uppercase">${artist}</div><h1 style="margin:8px 0 18px;font-size:28px">${htmlEscape(title)}</h1>${content}<div style="margin-top:26px;padding-top:18px;border-top:1px solid #282b45;color:#8f96b3;font-size:12px">Powered by OneArtist Hub</div></div></div></body></html>`; }
+async function adminEmail(env){ const a=await env.DB.prepare('SELECT email FROM admins ORDER BY id LIMIT 1').first(); return a?.email||''; }
+async function sendSecurityEmail(env,to,title,message){ if(!to)return; const prefs=await notificationPrefs(env); if(!prefs.security_alerts)return {ok:false,skipped:true}; const html=await emailShell(env,title,`<p style="line-height:1.7;color:#cdd1e4">${htmlEscape(message)}</p>`); return sendEmail(env,{to,subject:title,html,text:message,template:'security'}); }
+async function sendOrderEmails(env,order,items,url){
+  const prefs=await notificationPrefs(env), settings=await getSettings(env), currency=order.currency||'USD', hasPhysical=items.some(x=>x.kind==='physical'), hasDigital=items.some(x=>x.kind==='digital');
+  const rows=items.map(x=>`<tr><td style="padding:9px 0;border-bottom:1px solid #24263c">${htmlEscape(x.title)} × ${x.qty}</td><td style="padding:9px 0;border-bottom:1px solid #24263c;text-align:right">${new Intl.NumberFormat('en-US',{style:'currency',currency}).format(Number(x.price)*Number(x.qty))}</td></tr>`).join('');
+  const receiptUrl=`${url.origin}/order/${encodeURIComponent(order.publicId)}`;
+  const customerHtml=await emailShell(env,'Thanks for your purchase',`<p style="color:#cdd1e4">Order <strong>${htmlEscape(order.publicId)}</strong> is paid.</p><table style="width:100%;border-collapse:collapse;color:#eef1ff">${rows}</table><p style="font-size:20px"><strong>Total: ${new Intl.NumberFormat('en-US',{style:'currency',currency}).format(order.total)}</strong></p>${hasDigital?'<p style="color:#9cefc7">Your digital downloads are available from the receipt page.</p>':''}<p><a href="${receiptUrl}" style="display:inline-block;padding:12px 18px;border-radius:999px;background:#8d66ff;color:white;text-decoration:none">View Receipt${hasDigital?' & Downloads':''}</a></p>`);
+  await sendEmail(env,{to:order.email,subject:`Purchase receipt — ${settings.artist?.name||'OneArtist Hub'}`,html:customerHtml,text:`Your order ${order.publicId} is paid. Receipt: ${receiptUrl}`,template:'purchase_receipt'});
+  const ae=await adminEmail(env); if(ae&&prefs.new_order&&((hasPhysical&&prefs.physical_sale)||(hasDigital&&prefs.digital_sale))){ const label=hasPhysical&&hasDigital?'Mixed order':hasPhysical?'Merch order':'Digital sale'; const adminHtml=await emailShell(env,'New sale',`<p style="color:#cdd1e4"><strong>${htmlEscape(label)}</strong> from ${htmlEscape(order.name||order.email)}.</p><table style="width:100%;border-collapse:collapse;color:#eef1ff">${rows}</table><p style="font-size:20px"><strong>Total: ${new Intl.NumberFormat('en-US',{style:'currency',currency}).format(order.total)}</strong></p>`); await sendEmail(env,{to:ae,subject:`New sale — ${new Intl.NumberFormat('en-US',{style:'currency',currency}).format(order.total)}`,html:adminHtml,text:`New order ${order.publicId} for ${order.total} ${currency}.`,template:'admin_new_order'}); }
+}
 async function paypalConfig(env){ const r=await env.DB.prepare(`SELECT data_enc FROM integrations WHERE provider='paypal'`).first(); return r?decrypt(env,r.data_enc):null; }
 async function paypalAccess(cfg){ const base=cfg.environment==='live'?'https://api-m.paypal.com':'https://api-m.sandbox.paypal.com'; const token=btoa(`${cfg.clientId}:${cfg.clientSecret}`); const res=await fetch(`${base}/v1/oauth2/token`,{method:'POST',headers:{authorization:`Basic ${token}`,'content-type':'application/x-www-form-urlencoded'},body:'grant_type=client_credentials'}); if(!res.ok) throw new Error('PayPal authentication failed'); const j=await res.json(); return {base,token:j.access_token}; }
 const currencyCode=v=>/^[A-Z]{3}$/.test(String(v||'').toUpperCase())?String(v).toUpperCase():'USD';
@@ -77,11 +132,12 @@ async function resolveCart(env,cart){
 }
 function seriesDays(rows,key='v'){ const map=new Map((rows||[]).map(r=>[r.day,Number(r[key]||0)])),out=[]; for(let i=29;i>=0;i--){const d=new Date(Date.now()-i*86400000).toISOString().slice(0,10);out.push({day:d,value:map.get(d)||0});} return out; }
 
-async function route(req,env,url){
+async function route(req,env,url,ctx){
   if(!env.DB) return json({ok:false,error:'D1 binding DB is missing. Add a D1 binding named DB in Cloudflare.'},503);
   const p=url.pathname.replace(/^\/api\/?/,'').replace(/\/$/,'');
   const method=req.method.toUpperCase();
-  if(p==='status' && method==='GET') return json({ok:true,installed:await isInstalled(env),version:'0.1.1'});
+  const installed=await isInstalled(env); if(installed)await ensureUpgrade012(env);
+  if(p==='status' && method==='GET') return json({ok:true,installed,version:'0.1.2'});
   if(p==='setup' && method==='POST'){
     if(await isInstalled(env)) return json({ok:false,error:'OneArtist Hub is already installed.'},409);
     const b=await body(req); if(!env.ONEARTIST_SETUP_KEY || b.setupKey!==env.ONEARTIST_SETUP_KEY) return json({ok:false,error:'Invalid setup key.'},403);
@@ -116,6 +172,35 @@ async function route(req,env,url){
   }
   if(!(await isInstalled(env))) return json({ok:false,error:'OneArtist Hub is not installed.',setupRequired:true},428);
 
+
+  if(p==='auth/forgot-password' && method==='POST'){
+    const b=await body(req), email=cleanText(b.email,160).trim().toLowerCase(), generic={ok:true,message:'If that administrator email exists and email delivery is configured, a reset link has been sent.'};
+    if(!email.includes('@'))return json(generic);
+    const a=await env.DB.prepare('SELECT id,email FROM admins WHERE email=?').bind(email).first(); if(!a)return json(generic);
+    const recent=await env.DB.prepare(`SELECT COUNT(*) c FROM password_reset_tokens WHERE admin_id=? AND created_at>=datetime('now','-15 minutes')`).bind(a.id).first(); if(Number(recent?.c||0)>=3)return json(generic);
+    const raw=bytesToB64(crypto.getRandomValues(new Uint8Array(36))).replace(/[+/=]/g,''), th=await sha(raw), exp=new Date(Date.now()+30*60*1000).toISOString();
+    await env.DB.prepare('INSERT INTO password_reset_tokens(token_hash,admin_id,expires_at,used_at,created_at) VALUES(?,?,?,?,?)').bind(th,a.id,exp,null,now()).run();
+    const resetUrl=`${url.origin}/admin/reset-password?token=${encodeURIComponent(raw)}`, html=await emailShell(env,'Reset your administrator password',`<p style="color:#cdd1e4;line-height:1.7">A password reset was requested for your OneArtist Hub administrator account. This link expires in 30 minutes and works once.</p><p><a href="${resetUrl}" style="display:inline-block;padding:12px 18px;border-radius:999px;background:#8d66ff;color:#fff;text-decoration:none">Reset Password</a></p><p style="color:#8f96b3;font-size:12px">If you did not request this, you can ignore this message.</p>`);
+    const task=sendEmail(env,{to:a.email,subject:'Reset your OneArtist Hub password',html,text:`Reset your password: ${resetUrl}`,template:'password_reset'}); ctx?.waitUntil?ctx.waitUntil(task):await task;
+    return json(generic);
+  }
+  if(p==='auth/reset-password' && method==='POST'){
+    const b=await body(req), token=String(b.token||''), password=String(b.password||''); if(password.length<10)return json({ok:false,error:'Password must be at least 10 characters.'},400);
+    const th=await sha(token), row=await env.DB.prepare(`SELECT prt.*,a.email FROM password_reset_tokens prt JOIN admins a ON a.id=prt.admin_id WHERE prt.token_hash=?`).bind(th).first();
+    if(!row||row.used_at||new Date(row.expires_at)<=new Date())return json({ok:false,error:'This reset link is invalid or has expired.'},410);
+    const salt=bytesToB64(crypto.getRandomValues(new Uint8Array(18))), ph=await hashPassword(password,salt), t=now();
+    await env.DB.batch([env.DB.prepare('UPDATE admins SET password_hash=?,password_salt=? WHERE id=?').bind(ph,salt,row.admin_id),env.DB.prepare('UPDATE password_reset_tokens SET used_at=? WHERE token_hash=?').bind(t,th),env.DB.prepare('DELETE FROM sessions WHERE admin_id=?').bind(row.admin_id)]);
+    await createNotification(env,'security','Password reset','The administrator password was reset using email recovery.','security');
+    const task=sendSecurityEmail(env,row.email,'OneArtist Hub password changed','Your administrator password was reset. If this was not you, review your account and email provider immediately.'); ctx?.waitUntil?ctx.waitUntil(task):await task;
+    return json({ok:true});
+  }
+
+  if(p==='auth/emergency-reset' && method==='POST'){
+    const b=await body(req); if(!env.ONEARTIST_SETUP_KEY||String(b.setupKey||'')!==env.ONEARTIST_SETUP_KEY)return json({ok:false,error:'Invalid recovery key.'},403);
+    const login=cleanText(b.login,160).trim(), password=String(b.password||''); if(password.length<10)return json({ok:false,error:'New password must be at least 10 characters.'},400);
+    const a=await env.DB.prepare('SELECT * FROM admins WHERE username=? OR email=?').bind(login,login.toLowerCase()).first(); if(!a)return json({ok:false,error:'Administrator account was not found.'},404);
+    const salt=bytesToB64(crypto.getRandomValues(new Uint8Array(18))), ph=await hashPassword(password,salt); await env.DB.batch([env.DB.prepare('UPDATE admins SET password_hash=?,password_salt=? WHERE id=?').bind(ph,salt,a.id),env.DB.prepare('DELETE FROM sessions WHERE admin_id=?').bind(a.id)]); await createNotification(env,'security','Emergency password recovery','The administrator password was reset with the deployment recovery key.','security'); return json({ok:true});
+  }
   if(p==='auth/login' && method==='POST'){
     const b=await body(req), login=cleanText(b.login,160).trim(); const a=await env.DB.prepare('SELECT * FROM admins WHERE username=? OR email=?').bind(login,login.toLowerCase()).first();
     if(!a || await hashPassword(String(b.password||''),a.password_salt)!==a.password_hash) return json({ok:false,error:'Invalid username/email or password.'},401);
@@ -165,6 +250,9 @@ async function route(req,env,url){
       if(x.kind==='physical'&&x.data.inventory!==''&&x.data.inventory!=null){const latest=contentRow(await env.DB.prepare('SELECT * FROM content_items WHERE id=?').bind(x.id).first()); if(latest){latest.data.inventory=Math.max(0,(Math.floor(Number(latest.data.inventory)||0)-x.qty)); await env.DB.prepare('UPDATE content_items SET data=?,updated_at=? WHERE id=?').bind(JSON.stringify(latest.data),t,x.id).run();}}
     }
     await env.DB.prepare('DELETE FROM checkout_sessions WHERE paypal_order_id=?').bind(paypalOrderId).run();
+    const saleLabel=items.some(x=>x.kind==='physical')?'New merchandise order':'New digital sale'; await createNotification(env,'sale',saleLabel,`${name||email} purchased ${items.map(x=>x.title).join(', ')} for ${checkout.total} ${checkout.currency}.`,'orders');
+    const orderForEmail={publicId,total:Number(checkout.total),email,name,currency:checkout.currency}; const task=sendOrderEmails(env,orderForEmail,items,url); ctx?.waitUntil?ctx.waitUntil(task):await task;
+    const prefs=await notificationPrefs(env); if(prefs.low_inventory){ for(const x of items.filter(i=>i.kind==='physical')){ const latest=contentRow(await env.DB.prepare('SELECT * FROM content_items WHERE id=?').bind(x.id).first()); const inv=latest?.data?.inventory; if(inv!==''&&inv!=null&&Number(inv)<=Number(prefs.low_inventory_threshold||5)){ const inventoryMessage=`${latest.title} has ${inv} item(s) remaining.`; await createNotification(env,'inventory','Low inventory',inventoryMessage,'product'); const ae=await adminEmail(env); if(ae){ const html=await emailShell(env,'Low inventory',`<p style="color:#cdd1e4">${htmlEscape(inventoryMessage)}</p>`); const lowTask=sendEmail(env,{to:ae,subject:`Low inventory — ${latest.title}`,html,text:inventoryMessage,template:'low_inventory'}); ctx?.waitUntil?ctx.waitUntil(lowTask):await lowTask; } } } }
     return json({ok:true,order:{publicId,total:Number(checkout.total),email}});
   }
   const orderMatch=p.match(/^order\/([^/]+)$/); if(orderMatch&&method==='GET'){
@@ -199,11 +287,33 @@ async function route(req,env,url){
   }
   if(p==='admin/settings'&&method==='GET') return json({ok:true,settings:await getSettings(env)});
   if(p==='admin/settings'&&(method==='PUT'||method==='POST')){ if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403); const b=await body(req); for(const [k,v] of Object.entries(b.settings||{}))await setSetting(env,cleanText(k,80),v); return json({ok:true,settings:await getSettings(env)}); }
-  if(p==='admin/integrations'&&method==='POST'){ if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403); const b=await body(req), provider=cleanText(b.provider,40); if(!['paypal','dropbox'].includes(provider))return json({ok:false,error:'Unsupported provider.'},400); const data=provider==='paypal'?{clientId:cleanText(b.clientId,300),clientSecret:String(b.clientSecret||''),environment:b.environment==='live'?'live':'sandbox'}:{accessToken:String(b.accessToken||'')}; if((provider==='paypal'&&!data.clientSecret)||(provider==='dropbox'&&!data.accessToken))return json({ok:false,error:'Required secret missing.'},400); const e=await encrypt(env,data); await env.DB.prepare(`INSERT INTO integrations(provider,data_enc,updated_at) VALUES(?,?,?) ON CONFLICT(provider) DO UPDATE SET data_enc=excluded.data_enc,updated_at=excluded.updated_at`).bind(provider,e,now()).run(); return json({ok:true}); }
+
+  if(p==='admin/account'&&method==='GET') return json({ok:true,user:{username:user.username,email:user.email}});
+  if(p==='admin/account/password'&&method==='POST'){
+    if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403); const b=await body(req), current=String(b.currentPassword||''), next=String(b.newPassword||''); if(next.length<10)return json({ok:false,error:'New password must be at least 10 characters.'},400);
+    const a=await env.DB.prepare('SELECT * FROM admins WHERE id=?').bind(user.admin_id).first(); if(!a||await hashPassword(current,a.password_salt)!==a.password_hash)return json({ok:false,error:'Current password is incorrect.'},403);
+    const salt=bytesToB64(crypto.getRandomValues(new Uint8Array(18))), ph=await hashPassword(next,salt); await env.DB.batch([env.DB.prepare('UPDATE admins SET password_hash=?,password_salt=? WHERE id=?').bind(ph,salt,user.admin_id),env.DB.prepare('DELETE FROM sessions WHERE admin_id=? AND id<>?').bind(user.admin_id,user.id)]);
+    await createNotification(env,'security','Password changed','Your administrator password was changed. Other sessions were signed out.','security'); const task=sendSecurityEmail(env,a.email,'OneArtist Hub password changed','Your administrator password was changed and other sessions were signed out.'); ctx?.waitUntil?ctx.waitUntil(task):await task; return json({ok:true});
+  }
+  if(p==='admin/account/email'&&method==='POST'){
+    if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403); const b=await body(req), email=cleanText(b.email,160).trim().toLowerCase(), password=String(b.currentPassword||''); if(!email.includes('@'))return json({ok:false,error:'Enter a valid email address.'},400);
+    const a=await env.DB.prepare('SELECT * FROM admins WHERE id=?').bind(user.admin_id).first(); if(!a||await hashPassword(password,a.password_salt)!==a.password_hash)return json({ok:false,error:'Current password is incorrect.'},403); const old=a.email;
+    try{await env.DB.prepare('UPDATE admins SET email=? WHERE id=?').bind(email,user.admin_id).run()}catch{return json({ok:false,error:'That email is already in use.'},409)}
+    await createNotification(env,'security','Administrator email changed',`Administrator email changed from ${old} to ${email}.`,'security');
+    const task=Promise.all([sendSecurityEmail(env,old,'OneArtist Hub email changed',`The administrator email was changed to ${email}.`),sendSecurityEmail(env,email,'OneArtist Hub email updated','This address is now the administrator email for OneArtist Hub.')]); ctx?.waitUntil?ctx.waitUntil(task):await task; return json({ok:true,user:{username:a.username,email}});
+  }
+  if(p==='admin/notifications'&&method==='GET'){ const {results=[]}=await env.DB.prepare('SELECT * FROM notifications ORDER BY created_at DESC LIMIT 40').all(); const unread=results.filter(x=>!x.is_read).length; return json({ok:true,notifications:results.map(x=>({...x,is_read:!!x.is_read})),unread}); }
+  if(p==='admin/notifications/read-all'&&method==='POST'){ if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403); await env.DB.prepare('UPDATE notifications SET is_read=1 WHERE is_read=0').run(); return json({ok:true}); }
+  const noteMatch=p.match(/^admin\/notifications\/([^/]+)$/); if(noteMatch&&method==='PUT'){ if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403); await env.DB.prepare('UPDATE notifications SET is_read=1 WHERE id=?').bind(noteMatch[1]).run(); return json({ok:true}); }
+  if(p==='admin/notification-preferences'&&method==='GET'){ return json({ok:true,preferences:await notificationPrefs(env)}); }
+  if(p==='admin/notification-preferences'&&method==='PUT'){ if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403); const b=await body(req), f=x=>b[x]===false||b[x]===0?0:1, threshold=Math.max(1,Math.min(100,Math.floor(Number(b.low_inventory_threshold)||5))); await env.DB.prepare(`UPDATE notification_preferences SET new_order=?,digital_sale=?,physical_sale=?,shipping_updates=?,security_alerts=?,low_inventory=?,low_inventory_threshold=?,updated_at=? WHERE id=1`).bind(f('new_order'),f('digital_sale'),f('physical_sale'),f('shipping_updates'),f('security_alerts'),f('low_inventory'),threshold,now()).run(); return json({ok:true,preferences:await notificationPrefs(env)}); }
+  if(p==='admin/email/config'&&method==='GET'){ const cfg=await emailConfig(env); return json({ok:true,configured:!!(cfg?.apiKey&&cfg?.fromEmail),service:cfg?.service||'resend',fromName:cfg?.fromName||'',fromEmail:cfg?.fromEmail||'',replyTo:cfg?.replyTo||''}); }
+  if(p==='admin/email/test'&&method==='POST'){ if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403); const b=await body(req), to=cleanText(b.to||user.email,220); const html=await emailShell(env,'Email test','<p style="color:#cdd1e4">Your OneArtist Hub email integration is working.</p>'); const result=await sendEmail(env,{to,subject:'OneArtist Hub email test',html,text:'Your OneArtist Hub email integration is working.',template:'test'}); if(!result.ok)return json({ok:false,error:result.error||'Test email failed.'},502); return json({ok:true}); }
+  if(p==='admin/integrations'&&method==='POST'){ if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403); const b=await body(req), provider=cleanText(b.provider,40); if(!['paypal','dropbox','email'].includes(provider))return json({ok:false,error:'Unsupported provider.'},400); let data={}; if(provider==='paypal')data={clientId:cleanText(b.clientId,300),clientSecret:String(b.clientSecret||''),environment:b.environment==='live'?'live':'sandbox'}; else if(provider==='dropbox')data={accessToken:String(b.accessToken||'')}; else { let previous=null; try{previous=await emailConfig(env)}catch{} data={service:'resend',apiKey:String(b.apiKey||previous?.apiKey||''),fromName:cleanText(b.fromName||previous?.fromName||'',120),fromEmail:cleanText(b.fromEmail||previous?.fromEmail||'',220).trim(),replyTo:cleanText(b.replyTo||previous?.replyTo||'',220).trim()}; } if((provider==='paypal'&&!data.clientSecret)||(provider==='dropbox'&&!data.accessToken)||(provider==='email'&&(!data.apiKey||!data.fromEmail)))return json({ok:false,error:'Required secret or sender information is missing.'},400); const e=await encrypt(env,data); await env.DB.prepare(`INSERT INTO integrations(provider,data_enc,updated_at) VALUES(?,?,?) ON CONFLICT(provider) DO UPDATE SET data_enc=excluded.data_enc,updated_at=excluded.updated_at`).bind(provider,e,now()).run(); return json({ok:true}); }
   if(p==='admin/integrations'&&method==='GET'){ const {results=[]}=await env.DB.prepare('SELECT provider,updated_at FROM integrations').all(); return json({ok:true,integrations:results}); }
   if(p==='admin/youtube'&&method==='POST'){ if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403); const b=await body(req), youtubeId=youtubeIdFromUrl(b.url); if(!youtubeId)return json({ok:false,error:'Enter a valid YouTube video URL.'},400); const canonical=`https://www.youtube.com/watch?v=${youtubeId}`; let meta={}; try{const r=await fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(canonical)}&format=json`,{headers:{accept:'application/json'}}); if(r.ok)meta=await r.json()}catch{} return json({ok:true,youtubeId,title:cleanText(meta.title||'',250),author:cleanText(meta.author_name||'',250),thumbnail:cleanText(meta.thumbnail_url||`https://img.youtube.com/vi/${youtubeId}/hqdefault.jpg`,1000)}); }
   if(p==='admin/orders'&&method==='GET'){ const {results=[]}=await env.DB.prepare('SELECT id,public_id,customer_email,customer_name,currency,total,status,fulfillment_status,tracking_carrier,tracking_number,shipping_json,created_at FROM orders ORDER BY created_at DESC LIMIT 100').all(); return json({ok:true,orders:results.map(o=>({...o,shipping:(()=>{try{return JSON.parse(o.shipping_json||'{}')}catch{return {}}})()}))}); }
-  const adminOrder=p.match(/^admin\/orders\/([^/]+)$/); if(adminOrder&&method==='PUT'){ if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403); const b=await body(req), status=['unfulfilled','processing','shipped','delivered','not_required'].includes(b.fulfillmentStatus)?b.fulfillmentStatus:'unfulfilled'; await env.DB.prepare('UPDATE orders SET fulfillment_status=?,tracking_carrier=?,tracking_number=?,updated_at=? WHERE id=?').bind(status,cleanText(b.trackingCarrier,80)||null,cleanText(b.trackingNumber,160)||null,now(),adminOrder[1]).run(); return json({ok:true}); }
+  const adminOrder=p.match(/^admin\/orders\/([^/]+)$/); if(adminOrder&&method==='PUT'){ if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403); const b=await body(req), status=['unfulfilled','processing','shipped','delivered','not_required'].includes(b.fulfillmentStatus)?b.fulfillmentStatus:'unfulfilled', carrier=cleanText(b.trackingCarrier,80)||null, tracking=cleanText(b.trackingNumber,160)||null; const before=await env.DB.prepare('SELECT public_id,customer_email,customer_name,fulfillment_status FROM orders WHERE id=?').bind(adminOrder[1]).first(); await env.DB.prepare('UPDATE orders SET fulfillment_status=?,tracking_carrier=?,tracking_number=?,updated_at=? WHERE id=?').bind(status,carrier,tracking,now(),adminOrder[1]).run(); if(before&&before.fulfillment_status!==status&&(status==='shipped'||status==='delivered')){ const prefs=await notificationPrefs(env); if(prefs.shipping_updates){ const receiptUrl=`${url.origin}/order/${encodeURIComponent(before.public_id)}`, msg=status==='shipped'?`Your order has shipped${tracking?` via ${carrier||'carrier'} — tracking ${tracking}`:''}.`:'Your order has been marked delivered.'; const html=await emailShell(env,status==='shipped'?'Your order shipped':'Order delivered',`<p style="color:#cdd1e4">${htmlEscape(msg)}</p><p><a href="${receiptUrl}" style="display:inline-block;padding:12px 18px;border-radius:999px;background:#8d66ff;color:#fff;text-decoration:none">View Order</a></p>`); const task=sendEmail(env,{to:before.customer_email,subject:status==='shipped'?'Your order has shipped':'Your order was delivered',html,text:`${msg} ${receiptUrl}`,template:'shipping_update'}); ctx?.waitUntil?ctx.waitUntil(task):await task; } } return json({ok:true}); }
   const cRoot=p==='admin/content'; const cId=p.match(/^admin\/content\/([^/]+)$/);
   if(cRoot&&method==='GET'){ const type=url.searchParams.get('type'); if(type&&!ALLOWED_TYPES.has(type))return json({ok:false,error:'Invalid type'},400); const q=type?await env.DB.prepare('SELECT * FROM content_items WHERE type=? ORDER BY COALESCE(sort_date,created_at) DESC').bind(type).all():await env.DB.prepare('SELECT * FROM content_items ORDER BY created_at DESC').all(); return json({ok:true,items:(q.results||[]).map(contentRow)}); }
   if(cRoot&&method==='POST'){
@@ -274,6 +384,6 @@ async function route(req,env,url){
 export async function onRequest(context){
   try{
     if(context.request.method==='OPTIONS')return new Response(null,{status:204,headers:{allow:'GET,POST,PUT,DELETE,OPTIONS'}});
-    return await route(context.request,context.env,new URL(context.request.url));
+    return await route(context.request,context.env,new URL(context.request.url),context);
   }catch(err){ console.error('OneArtist API error',err); return json({ok:false,error:'Server error',message:String(err?.message||err)},500); }
 }
