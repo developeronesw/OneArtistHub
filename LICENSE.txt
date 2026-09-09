@@ -1,0 +1,8 @@
+OneArtist Hub 0.1.0 FOUNDATION
+Copyright (c) 2026 Developer One Inc. All rights reserved.
+
+This testing package is proprietary software. It may be used by the purchaser/license holder to evaluate, deploy and test OneArtist Hub for authorized projects. Redistribution, resale, sublicensing or publication of the source package is not granted by this notice.
+
+Final commercial licensing terms may be replaced by Developer One Inc. in a later production release.
+
+Third-party component notice: OneArtist Hub declares React, ReactDOM and Vite as build dependencies. Those third-party packages remain governed by their own open-source licenses when installed.

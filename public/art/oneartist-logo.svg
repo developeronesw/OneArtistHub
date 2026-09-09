@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 72" role="img" aria-label="OneArtist Hub">
+<defs><linearGradient id="g" x1="0" x2="1"><stop stop-color="#53e7ff"/><stop offset=".48" stop-color="#b45cff"/><stop offset="1" stop-color="#ff4fc8"/></linearGradient></defs>
+<g fill="none" stroke="url(#g)" stroke-width="5" stroke-linecap="round"><path d="M12 36h8m6-9v18m8-29v40m8-31v22m8-39v56m8-45v34m8-22v10m8-16v22m8-11h8"/></g>
+<text x="112" y="45" fill="#fff" font-family="Arial,Helvetica,sans-serif" font-weight="700" font-size="33">OneArtist</text><text x="270" y="45" fill="#62e6ff" font-family="Arial,Helvetica,sans-serif" font-weight="700" font-size="33">Hub</text>
+</svg>

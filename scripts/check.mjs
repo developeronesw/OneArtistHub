@@ -1,0 +1,48 @@
+import { readFile, readdir } from 'node:fs/promises';
+import { resolve, relative, extname } from 'node:path';
+import { execFileSync } from 'node:child_process';
+
+const root=resolve(process.cwd());
+let fail=false;
+const required=[
+  'index.html','package.json','src/app.js','src/styles.css','functions/api/[[path]].js','database/schema.sql',
+  'public/_headers','public/_redirects','public/_routes.json','public/art/oneartist-logo.svg','public/demo/higher-ground.wav'
+];
+for(const f of required){try{await readFile(resolve(root,f));console.log('PASS required',f)}catch{console.error('FAIL missing',f);fail=true}}
+
+for(const f of ['src/app.js','functions/api/[[path]].js','scripts/check.mjs']){
+  try{execFileSync(process.execPath,['--check',resolve(root,f)],{stdio:'pipe'});console.log('PASS syntax',f)}catch(e){console.error('FAIL syntax',f,String(e.stderr||e.message));fail=true}
+}
+
+const pkg=JSON.parse(await readFile(resolve(root,'package.json'),'utf8'));
+if(!pkg.dependencies?.react||!pkg.dependencies?.['react-dom']||!pkg.devDependencies?.vite){console.error('FAIL React/Vite dependency manifest');fail=true}else console.log('PASS React/Vite dependency manifest');
+if(pkg.scripts?.build!=='vite build'){console.error('FAIL expected Vite production build script');fail=true}else console.log('PASS Vite production build script');
+
+const app=await readFile(resolve(root,'src/app.js'),'utf8');
+const css=await readFile(resolve(root,'src/styles.css'),'utf8');
+const api=await readFile(resolve(root,'functions/api/[[path]].js'),'utf8');
+if(!/display:inline-flex;align-items:center;justify-content:center/.test(css)){console.error('FAIL centered button/icon CSS contract');fail=true}else console.log('PASS centered SVG button/icon contract');
+if(!/function Icon\(/.test(app)||!/<svg/i.test(await readFile(resolve(root,'public/art/oneartist-logo.svg'),'utf8'))){console.error('FAIL SVG icon/logo contract');fail=true}else console.log('PASS SVG icon/logo contract');
+if(!/checkout_sessions/.test(api)||!/Captured payment did not match/.test(api)){console.error('FAIL verified checkout binding');fail=true}else console.log('PASS verified checkout binding');
+if(!/seriesDays/.test(api)||!/30-Day Engagement/.test(app)){console.error('FAIL live analytics series');fail=true}else console.log('PASS live analytics series');
+
+const secretPatterns=[/sk_live_[A-Za-z0-9]+/i,/ghp_[A-Za-z0-9]{20,}/i,/clientSecret\s*[:=]\s*['"][^'"]{12,}['"]/i,/accessToken\s*[:=]\s*['"][^'"]{12,}['"]/i];
+async function walk(dir){const out=[];for(const ent of await readdir(dir,{withFileTypes:true})){if(['node_modules','dist','.git'].includes(ent.name))continue;const p=resolve(dir,ent.name);if(ent.isDirectory())out.push(...await walk(p));else out.push(p)}return out}
+const files=await walk(root);
+for(const p of files){
+  const rel=relative(root,p).replaceAll('\\','/');
+  const ext=extname(p).toLowerCase();
+  if(['.png','.jpg','.jpeg','.gif','.webp','.ico'].includes(ext)&&(/(^|\/)(src|public)\//.test(rel))){console.error('FAIL raster UI asset',rel);fail=true}
+  if(['.js','.mjs','.json','.md','.txt','.html','.css','.sql'].includes(ext)||!ext){
+    let t='';try{t=await readFile(p,'utf8')}catch{}
+    if(secretPatterns.some(r=>r.test(t))){console.error('FAIL possible embedded secret',rel);fail=true}
+  }
+}
+if(!files.some(p=>relative(root,p)==='public/art/oneartist-logo.svg')){console.error('FAIL logo missing');fail=true}
+else console.log('PASS no raster UI assets / built-in logo SVG');
+
+const routeConfig=JSON.parse(await readFile(resolve(root,'public/_routes.json'),'utf8'));
+if(routeConfig.version!==1||!routeConfig.include?.includes('/api/*')){console.error('FAIL Pages Functions route config');fail=true}else console.log('PASS Pages Functions route config');
+
+if(fail)process.exit(1);
+console.log('\nOneArtist Hub static/source QA PASSED.');
