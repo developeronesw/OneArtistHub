@@ -21,6 +21,7 @@ const ICONS={
   menu:'M4 7h16M4 12h16M4 17h16',
   close:'M5 5l14 14M19 5 5 19',
   plus:'M12 5v14M5 12h14',
+  minus:'M5 12h14',
   edit:'m4 20 4-.8L19 8.2 15.8 5 4.8 16 4 20Zm10.5-13.8 3.2 3.2',
   trash:'M4 7h16M9 7V4h6v3m-8 0 1 14h8l1-14M10 11v6M14 11v6',
   play:'M8 5v14l11-7z',
@@ -147,6 +148,11 @@ function youtubeIdFromUrl(value){
   const m=v.match(/(?:youtu\.be\/|youtube(?:-nocookie)?\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/|live\/))([A-Za-z0-9_-]{6,})/i)||v.match(/[?&]v=([A-Za-z0-9_-]{6,})/i);
   return m?m[1]:'';
 }
+function normalizeVariants(value){
+  if(Array.isArray(value))return value.map((v,i)=>({id:v.id||`v${i+1}`,name:v.name||'',size:v.size||'',color:v.color||'',sku:v.sku||'',inventory:v.inventory??'',price:v.price??''}));
+  if(typeof value==='string'&&value.trim())return value.split(/\r?\n/).map((line,i)=>{const [name='',sku='',inventory='',price='']=line.split('|').map(x=>x.trim());return{id:`v${i+1}`,name,size:name,color:'',sku,inventory,price}});
+  return [];
+}
 function blankFor(type){
   const base={type,title:'',slug:'',status:'published',sortDate:today(),featured:false,data:{}};
   const data={
@@ -154,7 +160,7 @@ function blankFor(type){
     track:{releaseId:'',trackNo:1,audio:'',cover:'',duration:'',price:'',explicit:false},
     video:{youtubeUrl:'',youtubeId:'',thumbnail:'',description:''},
     tour:{venue:'',ticketUrl:'',status:'Tickets Available',doors:'',city:'',region:'',country:'United States'},
-    product:{price:'',kind:'physical',inventory:'',image:'',description:'',dropboxPath:'',sku:'',variants:''},
+    product:{price:'',kind:'physical',inventory:'',image:'',description:'',dropboxPath:'',sku:'',variants:[]},
     page:{showInNav:true,html:'<section>\n  <h2>New Page</h2>\n  <p>Add your content here.</p>\n</section>'},
     media:{url:'',alt:'',mediaType:'image'},
     news:{excerpt:'',html:'',image:''}
@@ -162,7 +168,7 @@ function blankFor(type){
   return {...base,data:data[type]||{}};
 }
 
-const NAV=[['dashboard','Dashboard','home'],['homepage','Homepage','pages'],['release','Releases','music'],['track','Tracks','music'],['video','Videos','video'],['tour','Tour Dates','calendar'],['product','Store','bag'],['orders','Orders','cart'],['page','Pages','pages'],['media','Media Library','image'],['themes','Themes','palette'],['settings','Settings','settings'],['security','Security','shield']];
+const NAV=[['dashboard','Dashboard','home'],['homepage','Homepage','pages'],['release','Releases','music'],['track','Tracks','music'],['video','Videos','video'],['tour','Tour Dates','calendar'],['product','Store','bag'],['orders','Orders','cart'],['customers','Customers','users'],['downloads','Downloads','download'],['page','Pages','pages'],['media','Media Library','image'],['themes','Themes','palette'],['settings','Settings','settings'],['security','Security','shield']];
 function AdminShell({user,onLogout}){
   const [active,setActive]=useState('dashboard'),[menu,setMenu]=useState(false),[search,setSearch]=useState(''),[createRequest,setCreateRequest]=useState(null),[notifOpen,setNotifOpen]=useState(false),[notifications,setNotifications]=useState([]),[unread,setUnread]=useState(0);const [toast,show]=useToast();
   const select=k=>{setActive(k);setMenu(false);setNotifOpen(false)};
@@ -186,6 +192,8 @@ function AdminView({active,search,select,create,createRequest,onCreateHandled,sh
   if(active==='dashboard')return h(Dashboard,{select,create,show});
   if(['release','track','video','tour','product','page','media'].includes(active))return h(ContentManager,{type:active,search,show,createRequest,onCreateHandled});
   if(active==='orders')return h(Orders,{show});
+  if(active==='customers')return h(Customers,{show});
+  if(active==='downloads')return h(DownloadsAdmin,{show});
   if(active==='themes')return h(Themes,{show});
   if(active==='security')return h(SecurityPanel,{show});
   return h(Settings,{show,focus:active==='homepage'?'homepage':'settings'});
@@ -210,12 +218,14 @@ function Dashboard({select,create,show}){
   return h(React.Fragment,null,
     h(PageHead,{title:'Dashboard',subtitle:'Aurora Glass Studio — your music business at a glance.',actions:h('div',{className:'row wrap'},h('span',{className:'small muted'},updated?`Updated ${updated.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}`:''),h(Button,{icon:'repeat',onClick:load},'Refresh'),h(Button,{variant:'primary',icon:'plus',onClick:()=>create('release')},'New Release'))}),
     h('section',{className:'aurora-hero card'},h('div',{className:'copy'},h('div',{className:'eyebrow'},'Good evening'),h('h2',null,'Welcome Back.'),h('p',{className:'muted'},'Create. Release. Connect. Grow.'),h('div',{className:'row wrap'},h(Button,{variant:'primary',icon:'music',onClick:()=>create('release')},'New Release'),h(Button,{icon:'video',onClick:()=>create('video')},'Add Video'),h(Button,{icon:'calendar',onClick:()=>create('tour')},'Add Tour Date'),h(Button,{icon:'pages',onClick:()=>create('page')},'Create Page')))),
-    h('div',{className:'kpis'},h(Kpi,{label:'Revenue',value:fmtMoney(k.revenue),icon:'dollar',glow:'#ff55c8'}),h(Kpi,{label:'Orders',value:k.orders||0,icon:'cart',glow:'#9d5cff'}),h(Kpi,{label:'Releases',value:k.releases||0,icon:'music',glow:'#54e9ff'}),h(Kpi,{label:'Verified Plays',value:k.plays||0,icon:'play',glow:'#68f3b0'}),h(Kpi,{label:'Downloads',value:k.downloads||0,icon:'download',glow:'#ff9c55'}),h(Kpi,{label:'Site Views',value:k.views||0,icon:'eye',glow:'#5aa8ff'})),
+    h('div',{className:'kpis'},h(Kpi,{label:'Net Revenue',value:fmtMoney(k.revenue),icon:'dollar',glow:'#ff55c8'}),h(Kpi,{label:'Orders',value:k.orders||0,icon:'cart',glow:'#9d5cff'}),h(Kpi,{label:'Customers',value:k.customers||0,icon:'users',glow:'#54e9ff'}),h(Kpi,{label:'Avg. Order',value:fmtMoney(k.aov),icon:'bag',glow:'#68f3b0'}),h(Kpi,{label:'Verified Plays',value:k.plays||0,icon:'play',glow:'#ff9c55'}),h(Kpi,{label:'Downloads',value:k.downloads||0,icon:'download',glow:'#5aa8ff'})),
     h('div',{className:'dashboard-grid'},
       h('div',{className:'card card-pad span2'},h('div',{className:'row between'},h('strong',null,'30-Day Engagement'),h('span',{className:'pill'},'Server verified')),h(TrendChart,{series:d.series||{}})),
       h('div',{className:'card card-pad'},h('div',{className:'row between'},h('strong',null,'Upcoming Tour Dates'),h(Button,{className:'compact',onClick:()=>select('tour')},'View all')),d.tours?.length?d.tours.map(x=>h('div',{className:'list-row',key:x.id},h('div',{className:'pill'},fmtDate(x.sort_date).split(',')[0]),h('div',null,h('strong',null,x.title),h('div',{className:'small muted'},x.data.venue||'')),h(Icon,{name:'calendar'}))):h('div',{className:'empty'},'No upcoming shows')),
       h('div',{className:'card card-pad'},h('div',{className:'row between'},h('strong',null,'Recent Releases'),h(Button,{className:'compact',onClick:()=>select('release')},'Manage')),d.recentReleases?.length?d.recentReleases.map(x=>h('div',{className:'list-row',key:x.id},h('div',{className:'thumb'},h('img',{src:x.data.cover||'/art/neon-skies.svg'})),h('div',null,h('strong',null,x.title),h('div',{className:'small muted'},`${x.data.releaseType||'Release'} · ${fmtDate(x.sort_date)}`)),h(Icon,{name:'music'}))):h('div',{className:'empty'},'No releases')),
-      h('div',{className:'card card-pad'},h('div',{className:'row between'},h('strong',null,'Recent Orders'),h(Button,{className:'compact',onClick:()=>select('orders')},'View all')),d.recentOrders?.length?d.recentOrders.map(o=>h('div',{className:'list-row',key:o.public_id},h('div',{className:'avatar'},(o.customer_name||'C').slice(0,1)),h('div',null,h('strong',null,o.customer_name||'Customer'),h('div',{className:'small muted'},new Date(o.created_at).toLocaleString())),h('strong',null,fmtMoney(o.total)))):h('div',{className:'empty'},'No orders yet'))
+      h('div',{className:'card card-pad'},h('div',{className:'row between'},h('strong',null,'Recent Orders'),h(Button,{className:'compact',onClick:()=>select('orders')},'View all')),d.recentOrders?.length?d.recentOrders.map(o=>h('div',{className:'list-row',key:o.public_id},h('div',{className:'avatar'},(o.customer_name||'C').slice(0,1)),h('div',null,h('strong',null,o.customer_name||'Customer'),h('div',{className:'small muted'},new Date(o.created_at).toLocaleString())),h('strong',null,fmtMoney(o.total)))):h('div',{className:'empty'},'No orders yet')),
+      h('div',{className:'card card-pad'},h('div',{className:'row between'},h('strong',null,'Top Products'),h(Button,{className:'compact',onClick:()=>select('product')},'Store')),d.topProducts?.length?d.topProducts.map(x=>h('div',{className:'commerce-row',key:x.product_id},h('div',null,h('strong',null,x.title),h('div',{className:'small muted'},`${x.units||0} sold`)),h('strong',null,fmtMoney(x.revenue)))):h('div',{className:'empty'},'No product sales yet')),
+      h('div',{className:'card card-pad'},h('strong',null,'Commerce Snapshot'),h('div',{className:'commerce-snapshot'},h('div',null,h('span',{className:'muted small'},'Gross sales'),h('strong',null,fmtMoney(k.grossRevenue))),h('div',null,h('span',{className:'muted small'},'Refunds'),h('strong',{className:'danger'},fmtMoney(k.refunded))),h('div',null,h('span',{className:'muted small'},'Net revenue'),h('strong',{className:'success'},fmtMoney(k.revenue)))))
     )
   )
 }
@@ -278,6 +288,14 @@ function ContentEditor({item,type,onClose,onSaved}){
   const foot=h('div',{className:'row between wrap editor-foot'},h('span',{className:'small muted'},type==='page'?'HTML is sanitized server-side; scripts and unsafe handlers are removed.':'Saving writes directly to D1 through the authenticated API.'),h('div',{className:'row'},h(Button,{type:'button',onClick:onClose},'Cancel'),h(Button,{type:'submit',variant:'primary',icon:'save',disabled:busy},busy?'Saving…':form.status==='draft'?'Save Draft':'Publish / Save')));
   return h('div',{className:'modal-backdrop'},h('form',{className:'modal editor-modal',onSubmit:save},head,h('div',{className:'modal-body content-form'},basic,meta,h(TypeFields,{type,data:form.data||{},setData,releases:refs.releases,onFetchYouTube:fetchYouTube,youtubeBusy}),foot)),h(Toast,{toast}));
 }
+function VariantEditor({value,onChange}){
+  const variants=normalizeVariants(value);
+  const update=(i,key,val)=>{const next=variants.map((v,n)=>n===i?{...v,[key]:val}:v);onChange(next)};
+  const add=()=>onChange([...variants,{id:`v-${Date.now()}-${Math.random().toString(36).slice(2,6)}`,name:'',size:'',color:'',sku:'',inventory:'',price:''}]);
+  const remove=i=>onChange(variants.filter((_,n)=>n!==i));
+  return h('div',{className:'variant-editor'},h('div',{className:'row between wrap'},h('div',null,h('strong',null,'Product Variants'),h('div',{className:'small muted'},'Optional size/color/SKU inventory. If variants exist, buyers must choose one.')),h(Button,{type:'button',className:'compact',icon:'plus',onClick:add},'Add Variant')),variants.length?h('div',{className:'variant-list'},variants.map((v,i)=>h('div',{className:'variant-row card',key:v.id||i},h(Field,{label:'Name'},h(Input,{value:v.name||'',onChange:e=>update(i,'name',e.target.value),placeholder:'Black XL'})),h(Field,{label:'Size'},h(Input,{value:v.size||'',onChange:e=>update(i,'size',e.target.value),placeholder:'XL'})),h(Field,{label:'Color'},h(Input,{value:v.color||'',onChange:e=>update(i,'color',e.target.value),placeholder:'Black'})),h(Field,{label:'SKU'},h(Input,{value:v.sku||'',onChange:e=>update(i,'sku',e.target.value)})),h(Field,{label:'Inventory'},h(Input,{type:'number',min:0,value:v.inventory??'',onChange:e=>update(i,'inventory',e.target.value)})),h(Field,{label:'Price override'},h(Input,{type:'number',min:0,step:'.01',value:v.price??'',onChange:e=>update(i,'price',e.target.value),placeholder:'Base price'})),h(IconButton,{type:'button',icon:'trash',label:'Remove variant',onClick:()=>remove(i)})))):h('div',{className:'small muted variant-empty'},'No variants — the base product inventory will be used.'))
+}
+
 function TypeFields({type,data,setData,releases=[],onFetchYouTube,youtubeBusy=false}){
   if(type==='release')return h(React.Fragment,null,
     h('div',{className:'grid3'},h(Field,{label:'Release type'},h(Select,{value:data.releaseType||'Album',onChange:e=>setData('releaseType',e.target.value)},['Album','EP','Single','Mixtape','Compilation'].map(v=>h('option',{key:v},v)))),h(Field,{label:'Genre'},h(Input,{value:data.genre||'',onChange:e=>setData('genre',e.target.value)})),h(Field,{label:'Price (optional)'},h(Input,{type:'number',min:0,step:'.01',value:data.price??'',onChange:e=>setData('price',e.target.value)}))),
@@ -305,10 +323,10 @@ function TypeFields({type,data,setData,releases=[],onFetchYouTube,youtubeBusy=fa
     h('div',{className:'grid2'},h(Field,{label:'Show status'},h(Select,{value:data.status||'Tickets Available',onChange:e=>setData('status',e.target.value)},['Tickets Available','Sold Out','Cancelled','Private'].map(v=>h('option',{key:v},v)))),h(Field,{label:'Doors / Time'},h(Input,{value:data.doors||'',onChange:e=>setData('doors',e.target.value),placeholder:'7:00 PM'})))
   );
   if(type==='product')return h(React.Fragment,null,
-    h('div',{className:'grid3'},h(Field,{label:'Price'},h(Input,{required:true,type:'number',min:0,step:'.01',value:data.price??'',onChange:e=>setData('price',e.target.value)})),h(Field,{label:'Product type'},h(Select,{value:data.kind||'physical',onChange:e=>setData('kind',e.target.value)},h('option',{value:'physical'},'Physical merch'),h('option',{value:'digital'},'Digital download'))),h(Field,{label:'Inventory'},h(Input,{type:'number',min:0,value:data.inventory??'',disabled:data.kind==='digital',onChange:e=>setData('inventory',e.target.value)}))),
-    h('div',{className:'grid2'},h(Field,{label:'Product image URL'},h(Input,{value:data.image||'',onChange:e=>setData('image',e.target.value)})),h(Field,{label:'SKU'},h(Input,{value:data.sku||'',onChange:e=>setData('sku',e.target.value)}))),
+    h('div',{className:'grid3'},h(Field,{label:'Base price'},h(Input,{required:true,type:'number',min:0,step:'.01',value:data.price??'',onChange:e=>setData('price',e.target.value)})),h(Field,{label:'Product type'},h(Select,{value:data.kind||'physical',onChange:e=>setData('kind',e.target.value)},h('option',{value:'physical'},'Physical merch'),h('option',{value:'digital'},'Digital download'))),h(Field,{label:'Base inventory'},h(Input,{type:'number',min:0,value:data.inventory??'',disabled:data.kind==='digital',onChange:e=>setData('inventory',e.target.value),placeholder:'Used when no variants'}))),
+    h('div',{className:'grid2'},h(Field,{label:'Product image URL'},h(Input,{value:data.image||'',onChange:e=>setData('image',e.target.value)})),h(Field,{label:'Base SKU'},h(Input,{value:data.sku||'',onChange:e=>setData('sku',e.target.value)}))),
     data.kind==='digital'&&h(Field,{label:'Dropbox file path (private)'},h(Input,{value:data.dropboxPath||'',onChange:e=>setData('dropboxPath',e.target.value),placeholder:'/OneArtist/downloads/album.zip'})),
-    data.kind==='physical'&&h(Field,{label:'Variants / sizes (one per line)'},h(Textarea,{value:data.variants||'',onChange:e=>setData('variants',e.target.value),placeholder:'S\nM\nL\nXL'})),
+    data.kind==='physical'&&h(VariantEditor,{value:data.variants,onChange:v=>setData('variants',v)}),
     h(Field,{label:'Description'},h(Textarea,{value:data.description||'',onChange:e=>setData('description',e.target.value)}))
   );
   if(type==='page')return h(React.Fragment,null,h('label',{className:'row small'},h('input',{type:'checkbox',checked:!!data.showInNav,onChange:e=>setData('showInNav',e.target.checked)}),'Show page in main navigation'),h(Field,{label:'HTML editor'},h(Textarea,{className:'textarea code-editor',value:data.html||'',onChange:e=>setData('html',e.target.value),spellCheck:false})));
@@ -360,52 +378,76 @@ function Themes({show}){
 }
 
 function Orders({show}){
-  const [orders,setOrders]=useState([]),[selected,setSelected]=useState(null),[edit,setEdit]=useState({fulfillmentStatus:'unfulfilled',trackingCarrier:'',trackingNumber:''});
-  const load=()=>api('admin/orders').then(d=>setOrders(d.orders||[])).catch(e=>show(e.message,true));
+  const [orders,setOrders]=useState([]),[selected,setSelected]=useState(null),[edit,setEdit]=useState({fulfillmentStatus:'unfulfilled',trackingCarrier:'',trackingNumber:''}),[refundAmount,setRefundAmount]=useState(''),[busy,setBusy]=useState('');
+  const load=()=>api('admin/orders').then(d=>setOrders(d.orders||[])).catch(e=>show(e.message,true)); useEffect(()=>{load()},[]);
+  async function choose(o){setBusy('detail');try{const d=await api('admin/orders/'+o.id+'/detail');setSelected(d.order);setEdit({fulfillmentStatus:d.order.fulfillment_status||'unfulfilled',trackingCarrier:d.order.tracking_carrier||'',trackingNumber:d.order.tracking_number||''});setRefundAmount('')}catch(e){show(e.message,true)}finally{setBusy('')}}
+  async function save(){try{await api('admin/orders/'+selected.id,{method:'PUT',body:JSON.stringify(edit)});show('Fulfillment updated.');await load();const d=await api('admin/orders/'+selected.id+'/detail');setSelected(d.order)}catch(e){show(e.message,true)}}
+  async function refund(){if(!confirm(`Issue a PayPal refund${refundAmount?` of ${refundAmount}`:' for the remaining order total'}?`))return;setBusy('refund');try{const d=await api('admin/orders/'+selected.id+'/refund',{method:'POST',body:JSON.stringify({amount:refundAmount})});show(d.pending?(d.message||'Refund is pending at PayPal.'):'Refund completed through PayPal.');await load();const detail=await api('admin/orders/'+selected.id+'/detail');setSelected(detail.order);if(!d.pending)setRefundAmount('')}catch(e){show(e.message,true)}finally{setBusy('')}}
+  const rows=orders.map(o=>h('tr',{key:o.id},h('td',null,h('a',{href:'/order/'+o.public_id,target:'_blank',rel:'noopener'},o.public_id.slice(0,10)+'…')),h('td',null,o.customer_name||o.customer_email),h('td',null,fmtMoney(o.total,o.currency)),h('td',null,h('span',{className:'pill '+(o.status==='paid'?'success':o.status.includes('refund')?'warn':'')},o.status)),h('td',null,h('span',{className:'pill'},o.fulfillment_status||'unfulfilled')),h('td',null,new Date(o.created_at).toLocaleString()),h('td',null,h(Button,{className:'compact',icon:'edit',onClick:()=>choose(o),disabled:busy==='detail'},'Manage'))));
+  const table=orders.length?h('table',{className:'table'},h('thead',null,h('tr',null,['Order','Customer','Total','Payment','Fulfillment','Date',''].map((x,i)=>h('th',{key:i},x)))),h('tbody',null,rows)):h('div',{className:'empty'},'Orders will appear here after PayPal purchases.'); let detail=null;
+  if(selected){const addr=selected.shipping?.address||{},shipName=selected.shipping?.name?.full_name||selected.customer_name||'',address=selected.shipping&&Object.keys(selected.shipping).length?h('address',{className:'shipping-address'},shipName,h('br'),addr.address_line_1||'',addr.address_line_2&&h(React.Fragment,null,h('br'),addr.address_line_2),h('br'),[addr.admin_area_2,addr.admin_area_1,addr.postal_code].filter(Boolean).join(', '),h('br'),addr.country_code||''):h('p',{className:'muted'},'No physical shipping address on this order.'),remaining=Math.max(0,Number(selected.total||0)-Number(selected.refunded_amount||0));detail=h('section',{className:'card form-card order-detail'},h('div',{className:'row between wrap'},h('div',null,h('h3',null,selected.invoice_number||'Order'),h('p',{className:'small muted'},selected.customer_email,' · ',selected.status)),h(IconButton,{icon:'close',label:'Close order',onClick:()=>setSelected(null)})),h('div',{className:'order-items-admin'},selected.items?.map((i,n)=>h('div',{className:'commerce-row',key:n},h('div',null,h('strong',null,i.title),i.data?.selectedVariant&&h('div',{className:'small muted'},i.data.selectedVariant.name||[i.data.selectedVariant.size,i.data.selectedVariant.color].filter(Boolean).join(' / '))),h('span',null,`${i.quantity} × ${fmtMoney(i.unit_price,selected.currency)}`)))),h('div',{className:'grid2'},h('div',null,h('h4',null,'Shipping Address'),address),h('div',{className:'stack'},h(Field,{label:'Fulfillment status'},h(Select,{value:edit.fulfillmentStatus,onChange:e=>setEdit({...edit,fulfillmentStatus:e.target.value})},['unfulfilled','processing','shipped','delivered','not_required'].map(v=>h('option',{key:v,value:v},v.replace('_',' '))))),h(Field,{label:'Carrier'},h(Input,{value:edit.trackingCarrier,onChange:e=>setEdit({...edit,trackingCarrier:e.target.value}),placeholder:'USPS, UPS, FedEx…'})),h(Field,{label:'Tracking number'},h(Input,{value:edit.trackingNumber,onChange:e=>setEdit({...edit,trackingNumber:e.target.value})})),h(Button,{variant:'primary',icon:'save',onClick:save},'Save Fulfillment'))),h('div',{className:'refund-panel'},h('div',{className:'row between wrap'},h('div',null,h('strong',null,'PayPal Refund'),h('div',{className:'small muted'},`Refunded ${fmtMoney(selected.refunded_amount,selected.currency)} · Remaining ${fmtMoney(remaining,selected.currency)}`)),h('a',{className:'btn compact',href:'/order/'+selected.public_id,target:'_blank',rel:'noopener'},h(Icon,{name:'pages'}),' Receipt / Invoice')),remaining>0&&['paid','partially_refunded'].includes(selected.status)&&h('div',{className:'row wrap'},h(Field,{label:'Amount (blank = full remaining)'},h(Input,{type:'number',min:0.01,max:remaining,step:'.01',value:refundAmount,onChange:e=>setRefundAmount(e.target.value),placeholder:remaining.toFixed(2)})),h(Button,{className:'danger',icon:'dollar',onClick:refund,disabled:busy==='refund'},busy==='refund'?'Refunding…':'Issue Refund'))));}
+  return h(React.Fragment,null,h(PageHead,{title:'Orders',subtitle:'PayPal orders, invoices, refunds and physical fulfillment.',actions:h(Button,{icon:'repeat',onClick:load},'Refresh')}),h('div',{className:'card table-wrap'},table),detail);
+}
+function Customers({show}){
+  const [items,setItems]=useState([]);
+  const load=()=>api('admin/customers').then(d=>setItems(d.customers||[])).catch(e=>show(e.message,true));
   useEffect(()=>{load()},[]);
-  function choose(o){setSelected(o);setEdit({fulfillmentStatus:o.fulfillment_status||'unfulfilled',trackingCarrier:o.tracking_carrier||'',trackingNumber:o.tracking_number||''})}
-  async function save(){try{await api('admin/orders/'+selected.id,{method:'PUT',body:JSON.stringify(edit)});show('Fulfillment updated.');await load();setSelected(null)}catch(e){show(e.message,true)}}
-  const rows=orders.map(o=>h('tr',{key:o.id},
-    h('td',null,h('a',{href:'/order/'+o.public_id,target:'_blank',rel:'noopener'},o.public_id.slice(0,10)+'…')),
-    h('td',null,o.customer_name||o.customer_email),
-    h('td',null,fmtMoney(o.total,o.currency)),
-    h('td',null,h('span',{className:'pill success'},o.status)),
-    h('td',null,h('span',{className:'pill'},o.fulfillment_status||'unfulfilled')),
-    h('td',null,new Date(o.created_at).toLocaleString()),
-    h('td',null,h(Button,{className:'compact',icon:'edit',onClick:()=>choose(o)},'Manage'))
-  ));
-  const table=orders.length?h('table',{className:'table'},
-    h('thead',null,h('tr',null,['Order','Customer','Total','Payment','Fulfillment','Date',''].map((x,i)=>h('th',{key:i},x)))),
-    h('tbody',null,rows)
-  ):h('div',{className:'empty'},'Orders will appear here after PayPal purchases.');
-  let detail=null;
-  if(selected){
-    const addr=selected.shipping?.address||{}, shipName=selected.shipping?.name?.full_name||selected.customer_name||'';
-    const address=selected.shipping&&Object.keys(selected.shipping).length?h('address',{className:'shipping-address'},
-      shipName,h('br'),addr.address_line_1||'',addr.address_line_2&&h(React.Fragment,null,h('br'),addr.address_line_2),h('br'),[addr.admin_area_2,addr.admin_area_1,addr.postal_code].filter(Boolean).join(', '),h('br'),addr.country_code||''
-    ):h('p',{className:'muted'},'No physical shipping address on this order.');
-    detail=h('section',{className:'card form-card order-detail'},
-      h('div',{className:'row between wrap'},h('div',null,h('h3',null,'Fulfillment — ',selected.public_id.slice(0,12),'…'),h('p',{className:'small muted'},selected.customer_email)),h(IconButton,{icon:'close',label:'Close order',onClick:()=>setSelected(null)})),
-      h('div',{className:'grid2'},
-        h('div',null,h('h4',null,'Shipping Address'),address),
-        h('div',{className:'stack'},
-          h(Field,{label:'Fulfillment status'},h(Select,{value:edit.fulfillmentStatus,onChange:e=>setEdit({...edit,fulfillmentStatus:e.target.value})},['unfulfilled','processing','shipped','delivered','not_required'].map(v=>h('option',{key:v,value:v},v.replace('_',' '))))),
-          h(Field,{label:'Carrier'},h(Input,{value:edit.trackingCarrier,onChange:e=>setEdit({...edit,trackingCarrier:e.target.value}),placeholder:'USPS, UPS, FedEx…'})),
-          h(Field,{label:'Tracking number'},h(Input,{value:edit.trackingNumber,onChange:e=>setEdit({...edit,trackingNumber:e.target.value})})),
-          h(Button,{variant:'primary',icon:'save',onClick:save},'Save Fulfillment')
-        )
-      )
-    );
+  return h(React.Fragment,null,
+    h(PageHead,{title:'Customers',subtitle:'Customer value and order activity are calculated from verified orders.',actions:h(Button,{icon:'repeat',onClick:load},'Refresh')}),
+    h('div',{className:'card table-wrap'},
+      items.length
+        ? h('table',{className:'table'},
+            h('thead',null,h('tr',null,['Customer','Email','Orders','Lifetime Value','Last Order'].map(x=>h('th',{key:x},x)))),
+            h('tbody',null,items.map(x=>h('tr',{key:x.email},
+              h('td',null,x.customer_name||'Customer'),
+              h('td',null,x.email),
+              h('td',null,x.order_count),
+              h('td',null,fmtMoney(x.gross_value)),
+              h('td',null,x.last_order?new Date(x.last_order).toLocaleString():'—')
+            )))
+          )
+        : h('div',{className:'empty'},'Customers appear after verified purchases.')
+    )
+  );
+}
+
+function DownloadsAdmin({show}){
+  const [items,setItems]=useState([]),[busy,setBusy]=useState('');
+  const load=()=>api('admin/downloads').then(d=>setItems(d.downloads||[])).catch(e=>show(e.message,true));
+  useEffect(()=>{load()},[]);
+  async function reset(x){
+    if(!confirm(`Reset download count for ${x.customer_email}?`))return;
+    setBusy(x.id);
+    try{
+      await api('admin/downloads/'+x.id+'/reset',{method:'POST'});
+      show('Download allowance reset.');
+      await load();
+    }catch(e){show(e.message,true)}finally{setBusy('')}
   }
   return h(React.Fragment,null,
-    h(PageHead,{title:'Orders',subtitle:'PayPal orders, receipts and physical-fulfillment controls.',actions:h(Button,{icon:'repeat',onClick:load},'Refresh')}),
-    h('div',{className:'card table-wrap'},table),detail
+    h(PageHead,{title:'Digital Downloads',subtitle:'Entitlements, usage limits and reset controls.',actions:h(Button,{icon:'repeat',onClick:load},'Refresh')}),
+    h('div',{className:'card table-wrap'},
+      items.length
+        ? h('table',{className:'table'},
+            h('thead',null,h('tr',null,['Product','Customer','Order','Used','Limit','Status',''].map(x=>h('th',{key:x},x)))),
+            h('tbody',null,items.map(x=>h('tr',{key:x.id},
+              h('td',null,x.title||x.product_id),
+              h('td',null,x.customer_email),
+              h('td',null,(x.public_id||'').slice(0,10)+'…'),
+              h('td',null,x.downloads_used),
+              h('td',null,x.downloads_max),
+              h('td',null,x.status),
+              h('td',null,h(Button,{className:'compact',icon:'repeat',onClick:()=>reset(x),disabled:busy===x.id},busy===x.id?'Resetting…':'Reset'))
+            )))
+          )
+        : h('div',{className:'empty'},'Digital purchase entitlements appear here.')
+    )
   );
 }
 
 function Settings({show,focus}){
-  const [settings,setSettings]=useState(null),[ints,setInts]=useState([]),[paypal,setPaypal]=useState({clientId:'',clientSecret:'',environment:'sandbox'}),[dropbox,setDropbox]=useState({accessToken:''}),[emailCfg,setEmailCfg]=useState({service:'resend',apiKey:'',fromName:'',fromEmail:'',replyTo:'',configured:false}),[prefs,setPrefs]=useState(null),[testTo,setTestTo]=useState('');
-  const load=useCallback(()=>Promise.all([api('admin/settings'),api('admin/integrations'),api('admin/email/config'),api('admin/notification-preferences')]).then(([s,i,e,n])=>{setSettings(s.settings);setInts(i.integrations||[]);setEmailCfg(x=>({...x,...e,apiKey:''}));setPrefs(n.preferences);setTestTo(e.fromEmail||'')}).catch(e=>show(e.message,true)),[show]);
+  const [settings,setSettings]=useState(null),[ints,setInts]=useState([]),[paypal,setPaypal]=useState({clientId:'',clientSecret:'',environment:'sandbox',webhookId:''}),[dropbox,setDropbox]=useState({accessToken:''}),[emailCfg,setEmailCfg]=useState({service:'resend',apiKey:'',fromName:'',fromEmail:'',replyTo:'',configured:false}),[prefs,setPrefs]=useState(null),[testTo,setTestTo]=useState(''),[webhooks,setWebhooks]=useState([]);
+  const load=useCallback(()=>Promise.all([api('admin/settings'),api('admin/integrations'),api('admin/email/config'),api('admin/notification-preferences'),api('admin/paypal/config'),api('admin/webhooks')]).then(([s,i,e,n,p,w])=>{setSettings(s.settings);setInts(i.integrations||[]);setEmailCfg(x=>({...x,...e,apiKey:''}));setPrefs(n.preferences);setTestTo(e.fromEmail||'');setPaypal(x=>({...x,clientId:p.clientId||'',environment:p.environment||'sandbox',webhookId:p.webhookId||'',clientSecret:''}));setWebhooks(w.events||[])}).catch(e=>show(e.message,true)),[show]);
   useEffect(()=>{load()},[load]); if(!settings||!prefs)return h('div',{className:'empty'},'Loading settings…');
   const artist=settings.artist||{},site=settings.site||{},commerce=settings.commerce||{};const update=(group,key,val)=>setSettings(s=>({...s,[group]:{...(s[group]||{}),[key]:val}}));
   async function save(){try{const d=await api('admin/settings',{method:'PUT',body:JSON.stringify({settings:{artist:settings.artist,site:settings.site,commerce:settings.commerce,socials:settings.socials}})});setSettings(d.settings);show('Settings saved.')}catch(e){show(e.message,true)}}
@@ -417,9 +459,10 @@ function Settings({show,focus}){
     h('section',{className:'card form-card'},h('h3',null,'Artist Profile'),h('div',{className:'grid2'},h(Field,{label:'Artist / stage name'},h(Input,{value:artist.name||'',onChange:e=>update('artist','name',e.target.value)})),h(Field,{label:'Genre'},h(Input,{value:artist.genre||'',onChange:e=>update('artist','genre',e.target.value)})),h(Field,{label:'Location'},h(Input,{value:artist.location||'',onChange:e=>update('artist','location',e.target.value)})),h(Field,{label:'Profile image URL'},h(Input,{value:artist.profileImage||'',onChange:e=>update('artist','profileImage',e.target.value)}))),h(Field,{label:'Biography'},h(Textarea,{value:artist.bio||'',onChange:e=>update('artist','bio',e.target.value)}))),
     h('section',{className:'card form-card'},h('h3',null,'Homepage Hero'),h('div',{className:'grid2'},h(Field,{label:'Site title'},h(Input,{value:site.title||'',onChange:e=>update('site','title',e.target.value)})),h(Field,{label:'Artist logo SVG URL'},h(Input,{value:site.logoUrl||'',onChange:e=>update('site','logoUrl',e.target.value),placeholder:'/images/artist-logo.svg'})),h(Field,{label:'Accent color'},h(Input,{type:'color',value:site.accent||'#b45cff',onChange:e=>update('site','accent',e.target.value)})),h(Field,{label:'Hero headline'},h(Input,{value:site.heroTitle||'',onChange:e=>update('site','heroTitle',e.target.value)})),h(Field,{label:'Hero image URL'},h(Input,{value:site.heroImage||'',onChange:e=>update('site','heroImage',e.target.value)}))),h(Field,{label:'Hero subtitle'},h(Textarea,{value:site.heroSubtitle||'',onChange:e=>update('site','heroSubtitle',e.target.value)}))),
     h('section',{className:'card form-card'},h('h3',null,'Commerce'),h('div',{className:'grid3'},h(Field,{label:'Currency'},h(Input,{value:commerce.currency||'USD',onChange:e=>update('commerce','currency',e.target.value.toUpperCase().slice(0,3))})),h(Field,{label:'Flat physical shipping'},h(Input,{type:'number',step:'.01',min:0,value:commerce.flatShipping??0,onChange:e=>update('commerce','flatShipping',Number(e.target.value))})),h(Field,{label:'Digital download limit'},h(Input,{type:'number',min:1,max:50,value:commerce.downloadsMax??5,onChange:e=>update('commerce','downloadsMax',Number(e.target.value))})))),
-    h('section',{className:'card form-card'},h('div',{className:'row between'},h('h3',null,'PayPal'),ints.some(x=>x.provider==='paypal')&&h('span',{className:'pill success'},'Configured')),h('p',{className:'small muted'},'The Client Secret is encrypted before storage and never returned.'),h('div',{className:'grid2'},h(Field,{label:'PayPal Client ID'},h(Input,{value:paypal.clientId,onChange:e=>setPaypal({...paypal,clientId:e.target.value})})),h(Field,{label:'Environment'},h(Select,{value:paypal.environment,onChange:e=>setPaypal({...paypal,environment:e.target.value})},h('option',{value:'sandbox'},'Sandbox / Testing'),h('option',{value:'live'},'Live')))),h(Field,{label:'PayPal Client Secret'},h(Input,{type:'password',value:paypal.clientSecret,onChange:e=>setPaypal({...paypal,clientSecret:e.target.value}),placeholder:'Never stored in GitHub'})),h(Button,{icon:'lock',onClick:()=>saveInt('paypal',paypal)},'Save PayPal Securely')),
+    h('section',{className:'card form-card'},h('div',{className:'row between'},h('h3',null,'PayPal'),ints.some(x=>x.provider==='paypal')&&h('span',{className:'pill success'},'Configured')),h('p',{className:'small muted'},'The Client Secret is encrypted before storage and never returned.'),h('div',{className:'grid2'},h(Field,{label:'PayPal Client ID'},h(Input,{value:paypal.clientId,onChange:e=>setPaypal({...paypal,clientId:e.target.value})})),h(Field,{label:'Environment'},h(Select,{value:paypal.environment,onChange:e=>setPaypal({...paypal,environment:e.target.value})},h('option',{value:'sandbox'},'Sandbox / Testing'),h('option',{value:'live'},'Live')))),h('div',{className:'grid2'},h(Field,{label:'PayPal Client Secret'},h(Input,{type:'password',value:paypal.clientSecret,onChange:e=>setPaypal({...paypal,clientSecret:e.target.value}),placeholder:ints.some(x=>x.provider==='paypal')?'Leave blank to keep current secret':'Never stored in GitHub'})),h(Field,{label:'PayPal Webhook ID'},h(Input,{value:paypal.webhookId||'',onChange:e=>setPaypal({...paypal,webhookId:e.target.value}),placeholder:'From PayPal Developer Dashboard'}))),h(Field,{label:'Webhook listener URL'},h('div',{className:'copy-field'},h(Input,{readOnly:true,value:location.origin+'/api/paypal/webhook'}),h(Button,{type:'button',className:'compact',icon:'link',onClick:()=>navigator.clipboard?.writeText(location.origin+'/api/paypal/webhook')},'Copy'))),h('p',{className:'small muted'},'Subscribe this URL to CHECKOUT.ORDER.APPROVED, PAYMENT.CAPTURE.PENDING, PAYMENT.CAPTURE.COMPLETED, PAYMENT.CAPTURE.DENIED, PAYMENT.CAPTURE.REFUNDED and CHECKOUT.PAYMENT-APPROVAL.REVERSED.'),h(Button,{icon:'lock',onClick:()=>saveInt('paypal',paypal)},'Save PayPal Securely')),
+    h('section',{className:'card form-card'},h('div',{className:'row between wrap'},h('div',null,h('h3',null,'PayPal Webhook Health'),h('p',{className:'small muted'},paypal.webhookId?'Signed server-to-server events are enabled.':'Add the PayPal Webhook ID above before using Live checkout.')),h(Button,{className:'compact',icon:'repeat',onClick:load},'Refresh')),webhooks.length?h('div',{className:'webhook-events'},webhooks.slice(0,6).map(w=>h('div',{className:'webhook-row',key:w.event_id},h('span',{className:'webhook-state '+w.status},w.status),h('div',null,h('strong',null,w.event_type),h('div',{className:'small muted'},new Date(w.created_at).toLocaleString(),w.error?' · '+w.error:''))))):h('div',{className:'small muted'},'No verified webhook events received yet.')),
     h('section',{className:'card form-card'},h('div',{className:'row between'},h('h3',null,'Dropbox Digital Delivery'),ints.some(x=>x.provider==='dropbox')&&h('span',{className:'pill success'},'Configured')),h(Field,{label:'Dropbox access token'},h(Input,{type:'password',value:dropbox.accessToken,onChange:e=>setDropbox({accessToken:e.target.value}),placeholder:'Encrypted in D1'})),h(Button,{icon:'lock',onClick:()=>saveInt('dropbox',dropbox)},'Save Dropbox Securely')),
-    h('section',{className:'card form-card email-settings'},h('div',{className:'row between wrap'},h('div',null,h('h3',null,'Email & Sales Notifications'),h('p',{className:'small muted'},'Resend is supported in 0.1.2. The API key is AES-GCM encrypted in D1.')),emailCfg.configured&&h('span',{className:'pill success'},'Email Ready')),h('div',{className:'grid2'},h(Field,{label:'Provider'},h(Select,{value:'resend',disabled:true},h('option',{value:'resend'},'Resend'))),h(Field,{label:'From name'},h(Input,{value:emailCfg.fromName||'',onChange:e=>setEmailCfg({...emailCfg,fromName:e.target.value}),placeholder:'Artist Store'})),h(Field,{label:'From email'},h(Input,{type:'email',value:emailCfg.fromEmail||'',onChange:e=>setEmailCfg({...emailCfg,fromEmail:e.target.value}),placeholder:'sales@yourdomain.com'})),h(Field,{label:'Reply-to email'},h(Input,{type:'email',value:emailCfg.replyTo||'',onChange:e=>setEmailCfg({...emailCfg,replyTo:e.target.value}),placeholder:'artist@yourdomain.com'}))),h(Field,{label:'Resend API key'},h(Input,{type:'password',value:emailCfg.apiKey||'',onChange:e=>setEmailCfg({...emailCfg,apiKey:e.target.value}),placeholder:emailCfg.configured?'Enter a new key only when replacing configuration':'re_…'})),h('div',{className:'row wrap'},h(Button,{icon:'lock',onClick:()=>saveInt('email',emailCfg)},'Save Email Securely'),h(Field,{label:'Test recipient'},h(Input,{type:'email',value:testTo,onChange:e=>setTestTo(e.target.value),placeholder:'you@example.com'})),h(Button,{icon:'mail',onClick:testEmail,disabled:!emailCfg.configured},'Send Test Email')),
+    h('section',{className:'card form-card email-settings'},h('div',{className:'row between wrap'},h('div',null,h('h3',null,'Email & Sales Notifications'),h('p',{className:'small muted'},'Resend powers transactional receipts, account links and commerce alerts. The API key is AES-GCM encrypted in D1.')),emailCfg.configured&&h('span',{className:'pill success'},'Email Ready')),h('div',{className:'grid2'},h(Field,{label:'Provider'},h(Select,{value:'resend',disabled:true},h('option',{value:'resend'},'Resend'))),h(Field,{label:'From name'},h(Input,{value:emailCfg.fromName||'',onChange:e=>setEmailCfg({...emailCfg,fromName:e.target.value}),placeholder:'Artist Store'})),h(Field,{label:'From email'},h(Input,{type:'email',value:emailCfg.fromEmail||'',onChange:e=>setEmailCfg({...emailCfg,fromEmail:e.target.value}),placeholder:'sales@yourdomain.com'})),h(Field,{label:'Reply-to email'},h(Input,{type:'email',value:emailCfg.replyTo||'',onChange:e=>setEmailCfg({...emailCfg,replyTo:e.target.value}),placeholder:'artist@yourdomain.com'}))),h(Field,{label:'Resend API key'},h(Input,{type:'password',value:emailCfg.apiKey||'',onChange:e=>setEmailCfg({...emailCfg,apiKey:e.target.value}),placeholder:emailCfg.configured?'Enter a new key only when replacing configuration':'re_…'})),h('div',{className:'row wrap'},h(Button,{icon:'lock',onClick:()=>saveInt('email',emailCfg)},'Save Email Securely'),h(Field,{label:'Test recipient'},h(Input,{type:'email',value:testTo,onChange:e=>setTestTo(e.target.value),placeholder:'you@example.com'})),h(Button,{icon:'mail',onClick:testEmail,disabled:!emailCfg.configured},'Send Test Email')),
       h('div',{className:'notification-prefs'},prefToggle('new_order','Email artist for new orders'),prefToggle('digital_sale','Digital sale alerts'),prefToggle('physical_sale','Physical merch sale alerts'),prefToggle('shipping_updates','Customer shipping/tracking emails'),prefToggle('security_alerts','Security/account emails'),prefToggle('low_inventory','Low inventory alerts'),h(Field,{label:'Low inventory threshold'},h(Input,{type:'number',min:1,max:100,value:prefs.low_inventory_threshold||5,onChange:e=>setPrefs({...prefs,low_inventory_threshold:Number(e.target.value)||5})}))),h(Button,{icon:'save',onClick:savePrefs},'Save Notification Preferences'))
   ))
 }
@@ -515,8 +558,8 @@ function PublicSite({path,nav}){
   const homeReleases=allReleases.slice(0,3),homeVideos=allVideos.slice(0,3),homeTours=allTours.slice(0,3),homeProducts=allProducts.slice(0,4);
   const pages=content.filter(x=>x.type==='page'&&x.data.showInNav),route=location.pathname,custom=route.startsWith('/page/')?content.find(x=>x.type==='page'&&x.slug===route.split('/').pop()):null;
   const go=to=>{nav(to);setMobileNav(false)};
-  const links=[['/music','Music'],['/videos','Videos'],['/tour','Tour'],['/shop','Shop'],...pages.map(p=>['/page/'+p.slug,p.title])];
-  function addCart(p){setCart(c=>{const found=c.find(x=>x.id===p.id);return found?c.map(x=>x.id===p.id?{...x,qty:Math.min(20,x.qty+1)}:x):[...c,{id:p.id,title:p.title,price:Math.max(0,Number(p.data.price)||0),qty:1,image:p.data.image||''}]});show('Added to cart.')}
+  const links=[['/music','Music'],['/videos','Videos'],['/tour','Tour'],['/shop','Shop'],['/account','My Account'],...pages.map(p=>['/page/'+p.slug,p.title])];
+  function addCart(p,variant=null){const key=p.id+'::'+(variant?.id||'base'),price=variant&&variant.price!==''?Math.max(0,Number(variant.price)||0):Math.max(0,Number(p.data.price)||0),variantLabel=variant?(variant.name||[variant.size,variant.color].filter(Boolean).join(' / ')):'';setCart(c=>{const found=c.find(x=>x.key===key);return found?c.map(x=>x.key===key?{...x,qty:Math.min(20,x.qty+1)}:x):[...c,{key,id:p.id,variantId:variant?.id||'',variantLabel,title:p.title,price,qty:1,image:p.data.image||''}]});show('Added to cart.')}
   function openVideo(v){setVideo(v);api('analytics',{method:'POST',body:JSON.stringify({event:'video_view',objectType:'video',objectId:v.id})}).catch(()=>{})}
   function playTrackByRelease(rel){const i=tracks.findIndex(t=>t.data.releaseId===rel.id);if(i>=0)setCurrent(i);else show('No preview track has been added to this release yet.',true)}
   const brand=site.logoUrl?h('img',{src:site.logoUrl,alt:artist.name||site.title||'Artist',className:'public-artist-logo'}):h('span',{className:'public-artist-brand'},site.title||artist.name||'Artist');
@@ -533,7 +576,8 @@ function PublicSite({path,nav}){
 function HomePage({site,artist,releases,videos,tours,products,openVideo,addCart,playTrackByRelease}){return h(React.Fragment,null,h('section',{className:'public-hero',style:{backgroundImage:`linear-gradient(90deg,rgba(2,3,8,.9),rgba(2,3,8,.25)),url('${site.heroImage||'/art/hero-aurora.svg'}')`}},h('div',{className:'hero-copy'},h('div',{className:'pill'},artist.genre||'Independent Artist'),h('h1',null,site.heroTitle||artist.name||'OneArtist Hub'),h('p',null,site.heroSubtitle||artist.bio||''),h('div',{className:'row wrap'},h(Button,{variant:'primary',icon:'play',onClick:()=>releases[0]&&playTrackByRelease(releases[0])},'Listen Now'),h('a',{className:'btn',href:'#releases'},'Explore Releases')))),h(ReleaseSection,{releases,onPlay:playTrackByRelease}),h(VideoSection,{videos,onOpen:openVideo}),h(ProductSection,{products,onAdd:addCart}),h(TourSection,{tours}))}
 function ReleaseSection({releases,onPlay}){return h('section',{className:'public-section',id:'releases'},h('div',{className:'section-title'},h('h2',null,'Latest Releases'),h('span',{className:'muted'},'Albums · EPs · Singles')),releases.length?h('div',{className:'release-grid'},releases.map(r=>h('article',{className:'release-card card',key:r.id,onClick:()=>onPlay(r)},h('div',{className:'cover'},h('img',{src:r.data.cover||'/art/neon-skies.svg',alt:r.title})),h('div',{className:'card-copy'},h('div',{className:'small muted'},r.data.releaseType||'Release'),h('h3',null,r.title),h('div',{className:'row between'},h('span',{className:'small'},fmtDate(r.sort_date)),h(Icon,{name:'play'})))))):h('div',{className:'empty'},'No releases yet.'))}
 function VideoSection({videos,onOpen}){return h('section',{className:'public-section'},h('div',{className:'section-title'},h('h2',null,'Videos'),h('span',{className:'muted'},'Watch without leaving the site')),videos.length?h('div',{className:'video-grid'},videos.map(v=>h('article',{className:'video-card card',key:v.id,onClick:()=>onOpen(v)},h('div',{className:'cover'},h('img',{src:v.data.thumbnail||(v.data.youtubeId?`https://img.youtube.com/vi/${v.data.youtubeId}/hqdefault.jpg`:'/art/hero-aurora.svg'),alt:v.title})),h('div',{className:'card-copy'},h('h3',null,v.title),h('div',{className:'row'},h(Icon,{name:'play'}),h('span',{className:'small muted'},'Play Video')))))):h('div',{className:'empty'},'No videos yet.'))}
-function ProductSection({products,onAdd}){return h('section',{className:'public-section'},h('div',{className:'section-title'},h('h2',null,'Merch & Downloads'),h('span',{className:'muted'},'Official store')),products.length?h('div',{className:'product-grid'},products.map(p=>h('article',{className:'product-card card',key:p.id},h('div',{className:'cover'},h('img',{src:p.data.image||'/art/hoodie.svg',alt:p.title})),h('div',{className:'card-copy'},h('div',{className:'row between'},h('h3',null,p.title),h('strong',null,fmtMoney(p.data.price))),h(Button,{variant:'primary',icon:'cart',onClick:()=>onAdd(p)},'Add to Cart'))))):h('div',{className:'empty'},'No products yet.'))}
+function ProductCard({product,onAdd}){const variants=normalizeVariants(product.data.variants),[variantId,setVariantId]=useState(variants[0]?.id||''),chosen=variants.find(v=>v.id===variantId)||null,price=chosen&&chosen.price!==''?chosen.price:product.data.price,stock=chosen?chosen.inventory:product.data.inventory,soldOut=product.data.kind==='physical'&&stock!==''&&stock!=null&&Number(stock)<=0;return h('article',{className:'product-card card'},h('div',{className:'cover'},h('img',{src:product.data.image||'/art/hoodie.svg',alt:product.title})),h('div',{className:'card-copy stack'},h('div',{className:'row between'},h('h3',null,product.title),h('strong',null,fmtMoney(price))),product.data.description&&h('p',{className:'small muted product-description'},product.data.description),variants.length>0&&h(Field,{label:'Choose option'},h(Select,{value:variantId,onChange:e=>setVariantId(e.target.value)},variants.map(v=>h('option',{key:v.id,value:v.id,disabled:v.inventory!==''&&Number(v.inventory)<=0},`${v.name||[v.size,v.color].filter(Boolean).join(' / ')||'Option'}${v.inventory!==''?` — ${Number(v.inventory)>0?`${v.inventory} left`:'Sold out'}`:''}`)))),h(Button,{variant:'primary',icon:'cart',disabled:soldOut||variants.length>0&&!chosen,onClick:()=>onAdd(product,chosen)},soldOut?'Sold Out':'Add to Cart')))}
+function ProductSection({products,onAdd}){return h('section',{className:'public-section'},h('div',{className:'section-title'},h('h2',null,'Merch & Downloads'),h('span',{className:'muted'},'Official store')),products.length?h('div',{className:'product-grid'},products.map(p=>h(ProductCard,{key:p.id,product:p,onAdd}))):h('div',{className:'empty'},'No products yet.'))}
 function TourSection({tours}){return h('section',{className:'public-section'},h('div',{className:'section-title'},h('h2',null,'Upcoming Tour Dates'),h('span',{className:'muted'},'See you on the road')),h('div',{className:'tour-list'},tours.length?tours.map(t=>h('div',{className:'tour-row',key:t.id},h('strong',null,fmtDate(t.sort_date)),h('div',null,h('strong',null,t.title),h('div',{className:'small muted'},t.data.venue||'')),t.data.ticketUrl&&h('a',{className:'btn',href:t.data.ticketUrl,target:'_blank',rel:'noopener'},'Tickets'))):h('div',{className:'empty'},'No upcoming shows.'))) }
 function MusicPage({releases,tracks,setCurrent}){return h(React.Fragment,null,h('section',{className:'public-section'},h(PageHead,{title:'Music',subtitle:'Stream previews and explore the latest releases.'}),h('div',{className:'release-grid'},releases.map(r=>h('article',{className:'release-card card',key:r.id},h('div',{className:'cover'},h('img',{src:r.data.cover||'/art/neon-skies.svg'})),h('div',{className:'card-copy'},h('h3',null,r.title),h('p',{className:'small muted'},r.data.description||''),h(Button,{icon:'play',variant:'primary',onClick:()=>{const i=tracks.findIndex(t=>t.data.releaseId===r.id);if(i>=0)setCurrent(i)}},'Play')))))))}
 function VideosPage({videos,openVideo}){return h('section',{className:'public-section'},h(PageHead,{title:'Videos',subtitle:'Official YouTube videos open in a responsive modal.'}),h(VideoSection,{videos,onOpen:openVideo}))}
@@ -541,35 +585,86 @@ function TourPage({tours}){return h('section',{className:'public-section'},h(Pag
 function ShopPage({products,addCart}){return h('section',{className:'public-section'},h(PageHead,{title:'Shop',subtitle:'Music downloads and official merchandise.'}),h(ProductSection,{products,onAdd:addCart}))}
 function CustomPage({page}){return h('section',{className:'public-section'},h(PageHead,{title:page.title}),h('div',{className:'card card-pad',dangerouslySetInnerHTML:{__html:page.data.html||''}}))}
 function VideoModal({video,onClose}){useEffect(()=>{dispatchEvent(new CustomEvent('oah:pause-player'))},[]);return h('div',{className:'modal-backdrop',onClick:e=>{if(e.target===e.currentTarget)onClose()}},h('div',{className:'modal'},h('div',{className:'modal-head'},h('strong',null,video.title),h(IconButton,{icon:'close',onClick:onClose})),h('div',{className:'modal-body'},h('div',{className:'ratio'},h('iframe',{src:`https://www.youtube-nocookie.com/embed/${video.data.youtubeId}?autoplay=1&rel=0`,allow:'autoplay; encrypted-media; picture-in-picture',allowFullScreen:true,title:video.title})),video.data.description&&h('p',{className:'muted'},video.data.description))))}
-function CartModal({cart,setCart,onClose,show}){const [paypalReady,setPaypalReady]=useState(false);const cartRef=useRef(cart);const total=cart.reduce((n,x)=>n+x.price*x.qty,0);useEffect(()=>{cartRef.current=cart},[cart]);useEffect(()=>{if(!cart.length)return;api('paypal/config').then(cfg=>{if(!cfg.configured)return;const load=()=>{if(window.paypal){setPaypalReady(true);renderButtons();return}const existing=document.querySelector('script[data-oah-paypal-sdk]');if(existing){existing.addEventListener('load',()=>{setPaypalReady(true);renderButtons()},{once:true});return}const s=document.createElement('script');s.dataset.oahPaypalSdk='1';s.src=`https://www.paypal.com/sdk/js?client-id=${encodeURIComponent(cfg.clientId)}&currency=${encodeURIComponent(cfg.currency||'USD')}&intent=capture`;s.onload=()=>{setPaypalReady(true);renderButtons()};document.head.appendChild(s)};load();function renderButtons(){setTimeout(()=>{const el=document.getElementById('oah-paypal-buttons');if(!el||el.dataset.ready||!window.paypal)return;el.dataset.ready='1';window.paypal.Buttons({createOrder:()=>api('paypal/create-order',{method:'POST',body:JSON.stringify({cart:cartRef.current})}).then(d=>d.paypalOrderId),onApprove:data=>api('paypal/capture',{method:'POST',body:JSON.stringify({paypalOrderId:data.orderID})}).then(d=>{setCart([]);onClose();location.href='/order/'+d.order.publicId}),onError:err=>show('PayPal checkout failed: '+(err.message||err),true)}).render('#oah-paypal-buttons')},100)}}).catch(()=>{})},[cart.length]);return h('div',{className:'modal-backdrop'},h('div',{className:'modal'},h('div',{className:'modal-head'},h('strong',null,'Your Cart'),h(IconButton,{icon:'close',onClick:onClose})),h('div',{className:'modal-body stack'},cart.length?cart.map(x=>h('div',{className:'list-row',key:x.id},h('div',{className:'thumb'},h('img',{src:x.image||'/art/hoodie.svg'})),h('div',null,h('strong',null,x.title),h('div',{className:'small muted'},`Qty ${x.qty}`)),h('div',{className:'row'},h('strong',null,fmtMoney(x.price*x.qty)),h(IconButton,{icon:'trash',onClick:()=>setCart(cart.filter(y=>y.id!==x.id))})))):h('div',{className:'empty'},'Your cart is empty.'),cart.length>0&&h(React.Fragment,null,h('div',{className:'row between'},h('strong',null,'Subtotal'),h('strong',null,fmtMoney(total))),h('div',{id:'oah-paypal-buttons'}),!paypalReady&&h('p',{className:'small muted'},'PayPal buttons appear here after PayPal is configured in OneArtist Hub Settings. Physical shipping is added server-side.'))))) }
-function Receipt({publicId,nav}){
-  const [order,setOrder]=useState(null),[err,setErr]=useState(''),[msg,setMsg]=useState('');
-  useEffect(()=>{api('order/'+publicId).then(d=>setOrder(d.order)).catch(e=>setErr(e.message))},[publicId]);
-  async function download(item){
-    setMsg('Authorizing download…');
-    try{
-      const d=await api('downloads/request',{method:'POST',body:JSON.stringify({publicId,email:order.customer_email,productId:item.product_id})});
-      setMsg('Download authorized.'); location.href=d.url;
-    }catch(e){setMsg(e.message)}
-  }
-  if(err)return h('div',{className:'auth-page'},h('div',{className:'auth-box card'},h('h1',null,'Receipt unavailable'),h('p',null,err)));
-  if(!order)return h('div',{className:'auth-page'},'Loading receipt…');
-  return h('div',{className:'receipt'},
-    h('img',{src:'/art/oneartist-logo.svg',style:{width:220,filter:'invert(1)'}}),
-    h('div',{className:'row between wrap'},h('div',null,h('h1',null,'Purchase Receipt'),h('div',null,'Order: ',h('span',{className:'mono'},order.public_id))),h('div',null,h('strong',null,order.status.toUpperCase()),h('div',null,new Date(order.created_at).toLocaleString()))),
-    h('hr'),h('p',null,h('strong',null,'Customer: '),order.customer_name||order.customer_email),
-    h('table',null,
-      h('thead',null,h('tr',null,h('th',null,'Item'),h('th',null,'Qty'),h('th',null,'Price'),h('th',{className:'no-print'},'Delivery'))),
-      h('tbody',null,order.items.map(i=>h('tr',{key:i.product_id},h('td',null,i.title),h('td',null,i.quantity),h('td',null,fmtMoney(i.unit_price*i.quantity,order.currency)),h('td',{className:'no-print'},i.kind==='digital'?h(Button,{className:'compact',icon:'download',onClick:()=>download(i)},'Download'):'Physical item')))),
-      h('tfoot',null,h('tr',null,h('td',{colSpan:2},'Subtotal'),h('td',null,fmtMoney(order.subtotal,order.currency)),h('td',{className:'no-print'})),h('tr',null,h('td',{colSpan:2},'Shipping'),h('td',null,fmtMoney(order.shipping,order.currency)),h('td',{className:'no-print'})),h('tr',null,h('td',{colSpan:2},h('strong',null,'Total')),h('td',null,h('strong',null,fmtMoney(order.total,order.currency))),h('td',{className:'no-print'})))
-    ),
-    order.fulfillment_status&&order.fulfillment_status!=='not_required'&&h('p',null,h('strong',null,'Fulfillment: '),order.fulfillment_status,order.tracking_number?` · ${order.tracking_carrier||'Tracking'} ${order.tracking_number}`:''),
-    msg&&h('p',{className:'no-print small'},msg),
-    h('div',{className:'row no-print',style:{marginTop:20}},h(Button,{onClick:()=>print(),icon:'pages'},'Print / Save PDF'),h(Button,{onClick:()=>nav('/')},'Back to Site'))
+function CartModal({cart,setCart,onClose,show}){
+  const [paypalReady,setPaypalReady]=useState(false);
+  const cartRef=useRef(cart);
+  const total=cart.reduce((n,x)=>n+x.price*x.qty,0);
+  useEffect(()=>{cartRef.current=cart},[cart]);
+  useEffect(()=>{
+    if(!cart.length)return;
+    api('paypal/config').then(cfg=>{
+      if(!cfg.configured)return;
+      const renderButtons=()=>{
+        setTimeout(()=>{
+          const el=document.getElementById('oah-paypal-buttons');
+          if(!el||el.dataset.ready||!window.paypal)return;
+          el.dataset.ready='1';
+          window.paypal.Buttons({
+            createOrder:()=>api('paypal/create-order',{method:'POST',body:JSON.stringify({cart:cartRef.current})}).then(d=>d.paypalOrderId),
+            onApprove:data=>api('paypal/capture',{method:'POST',body:JSON.stringify({paypalOrderId:data.orderID})}).then(d=>{
+              setCart([]);
+              onClose();
+              if(d.pending){show(d.message||'PayPal is processing this payment. Your order will unlock after payment completes.');return}
+              location.href='/order/'+d.order.publicId;
+            }),
+            onError:err=>show('PayPal checkout failed: '+(err.message||err),true)
+          }).render('#oah-paypal-buttons');
+        },100);
+      };
+      const load=()=>{
+        if(window.paypal){setPaypalReady(true);renderButtons();return}
+        const existing=document.querySelector('script[data-oah-paypal-sdk]');
+        if(existing){existing.addEventListener('load',()=>{setPaypalReady(true);renderButtons()},{once:true});return}
+        const script=document.createElement('script');
+        script.dataset.oahPaypalSdk='1';
+        script.src=`https://www.paypal.com/sdk/js?client-id=${encodeURIComponent(cfg.clientId)}&currency=${encodeURIComponent(cfg.currency||'USD')}&intent=capture`;
+        script.onload=()=>{setPaypalReady(true);renderButtons()};
+        document.head.appendChild(script);
+      };
+      load();
+    }).catch(()=>{});
+  },[cart.length]);
+
+  const changeQty=(item,delta)=>setCart(current=>current.map(x=>x.key===item.key?{...x,qty:Math.max(1,Math.min(20,x.qty+delta))}:x));
+  const remove=item=>setCart(current=>current.filter(x=>(x.key||x.id)!==(item.key||item.id)));
+
+  return h('div',{className:'modal-backdrop'},
+    h('div',{className:'modal'},
+      h('div',{className:'modal-head'},h('strong',null,'Your Cart'),h(IconButton,{icon:'close',onClick:onClose,label:'Close cart'})),
+      h('div',{className:'modal-body stack'},
+        cart.length
+          ? cart.map(x=>h('div',{className:'cart-row',key:x.key||x.id},
+              h('div',{className:'thumb'},h('img',{src:x.image||'/art/hoodie.svg',alt:''})),
+              h('div',{className:'cart-copy'},
+                h('strong',null,x.title),
+                x.variantLabel&&h('div',{className:'small muted'},x.variantLabel),
+                h('div',{className:'qty-control'},
+                  h(IconButton,{icon:'minus',label:'Decrease quantity',onClick:()=>changeQty(x,-1)}),
+                  h('span',null,x.qty),
+                  h(IconButton,{icon:'plus',label:'Increase quantity',onClick:()=>changeQty(x,1)})
+                )
+              ),
+              h('div',{className:'row'},
+                h('strong',null,fmtMoney(x.price*x.qty)),
+                h(IconButton,{icon:'trash',label:'Remove item',onClick:()=>remove(x)})
+              )
+            ))
+          : h('div',{className:'empty'},'Your cart is empty.'),
+        cart.length>0&&h(React.Fragment,null,
+          h('div',{className:'row between'},h('strong',null,'Subtotal'),h('strong',null,fmtMoney(total))),
+          h('div',{id:'oah-paypal-buttons'}),
+          !paypalReady&&h('p',{className:'small muted'},'PayPal buttons appear here after PayPal is configured. Physical shipping is calculated server-side.')
+        )
+      )
+    )
   );
 }
 
+function CustomerAccount({nav}){const [session,setSession]=useState(null),[orders,setOrders]=useState([]),[email,setEmail]=useState(''),[busy,setBusy]=useState(false),[message,setMessage]=useState('');const token=new URLSearchParams(location.search).get('token');const load=useCallback(()=>api('customer/me').then(d=>{setSession(d);return api('customer/orders')}).then(d=>setOrders(d.orders||[])).catch(()=>setSession(null)),[]);useEffect(()=>{if(token){setBusy(true);api('customer/consume',{method:'POST',body:JSON.stringify({token})}).then(()=>{history.replaceState({},'', '/account');return load()}).catch(e=>setMessage(e.message)).finally(()=>setBusy(false))}else load()},[]);async function send(e){e.preventDefault();setBusy(true);try{const d=await api('customer/magic-link',{method:'POST',body:JSON.stringify({email})});setMessage(d.message)}catch(e){setMessage(e.message)}finally{setBusy(false)}}async function logout(){await api('customer/logout',{method:'POST'});setSession(null);setOrders([])}async function download(ent){setMessage('Creating secure one-time download…');try{const d=await api('customer/download',{method:'POST',body:JSON.stringify({entitlementId:ent.id})});location.href=d.url}catch(e){setMessage(e.message)}}if(!session)return h('div',{className:'customer-account-page'},h('div',{className:'account-login card'},h('img',{src:'/art/oneartist-logo.svg',className:'auth-logo'}),h('h1',null,'My Account'),h('p',{className:'muted'},'No password needed. Enter the email used at checkout and we’ll send a secure one-time sign-in link.'),h('form',{onSubmit:send,className:'stack'},h(Field,{label:'Purchase email'},h(Input,{type:'email',required:true,value:email,onChange:e=>setEmail(e.target.value),placeholder:'you@example.com'})),h(Button,{type:'submit',variant:'primary',icon:'mail',disabled:busy},busy?'Please wait…':'Email Secure Sign-In Link')),message&&h('p',{className:'small'},message),h(Button,{onClick:()=>nav('/')},'Back to Site')));return h('div',{className:'customer-account-page'},h('div',{className:'account-head'},h('div',null,h('div',{className:'eyebrow'},'CUSTOMER PORTAL'),h('h1',null,'My Orders & Downloads'),h('p',{className:'muted'},session.email)),h('div',{className:'row wrap'},h(Button,{icon:'repeat',onClick:load},'Refresh'),h(Button,{icon:'logout',onClick:logout},'Sign Out'),h(Button,{onClick:()=>nav('/')},'Back to Site'))),message&&h('div',{className:'card card-pad account-message'},message),orders.length?h('div',{className:'account-orders'},orders.map(o=>h('section',{className:'account-order card',key:o.id},h('div',{className:'row between wrap account-order-head'},h('div',null,h('strong',null,o.invoice_number||'Invoice'),h('div',{className:'small muted'},new Date(o.created_at).toLocaleString())),h('div',{className:'row'},h('span',{className:'pill '+(o.status==='paid'?'success':'')},o.status),h('strong',null,fmtMoney(Number(o.total)-Number(o.refunded_amount||0),o.currency)))),h('div',{className:'account-items'},o.items.map((i,n)=>{const ent=o.entitlements.find(e=>e.product_id===i.product_id);return h('div',{className:'account-item',key:n},h('div',null,h('strong',null,i.title),i.data?.selectedVariant&&h('div',{className:'small muted'},i.data.selectedVariant.name||[i.data.selectedVariant.size,i.data.selectedVariant.color].filter(Boolean).join(' / ')),h('div',{className:'small muted'},`${i.quantity} × ${fmtMoney(i.unit_price,o.currency)}`)),i.kind==='digital'&&ent?h(Button,{className:'compact',icon:'download',disabled:ent.downloads_used>=ent.downloads_max,onClick:()=>download(ent)},ent.downloads_used>=ent.downloads_max?'Limit Reached':`Download ${ent.downloads_used}/${ent.downloads_max}`):h('span',{className:'small muted'},o.fulfillment_status==='shipped'?(o.tracking_number?`${o.tracking_carrier||'Tracking'} ${o.tracking_number}`:'Shipped'):o.fulfillment_status.replace('_',' ')))})),h('div',{className:'row between wrap account-order-foot'},h('span',{className:'small muted'},o.refunded_amount>0?`Refunded ${fmtMoney(o.refunded_amount,o.currency)}`:''),h('a',{className:'btn compact',href:'/order/'+o.public_id},h(Icon,{name:'pages'}),' View Invoice'))))):h('div',{className:'empty'},'No orders found for this account.'))}
+function Receipt({publicId,nav}){const [order,setOrder]=useState(null),[err,setErr]=useState(''),[msg,setMsg]=useState('');useEffect(()=>{api('order/'+publicId).then(d=>setOrder(d.order)).catch(e=>setErr(e.message))},[publicId]);async function download(item){setMsg('Authorizing download…');try{const d=await api('downloads/request',{method:'POST',body:JSON.stringify({publicId,email:order.customer_email,productId:item.product_id})});setMsg('Download authorized.');location.href=d.url}catch(e){setMsg(e.message)}}if(err)return h('div',{className:'auth-page'},h('div',{className:'auth-box card'},h('h1',null,'Invoice unavailable'),h('p',null,err)));if(!order)return h('div',{className:'auth-page'},'Loading invoice…');const entitlementFor=id=>order.entitlements?.find(e=>e.product_id===id),captureTx=order.transactions?.find(t=>t.type==='capture'),transactionId=captureTx?.provider_id||order.paypal_order_id||'—';return h('div',{className:'receipt'},h('div',{className:'invoice-brand'},h('img',{src:order.branding?.logo||'/art/oneartist-logo.svg',style:{width:220}}),h('div',{className:'invoice-title'},h('strong',null,'PAID INVOICE / RECEIPT'),h('span',null,order.invoice_number||order.public_id))),h('div',{className:'invoice-meta'},h('div',null,h('span',null,'Invoice Status'),h('strong',null,order.status.toUpperCase())),h('div',null,h('span',null,'Purchase Date'),h('strong',null,new Date(order.created_at).toLocaleString())),h('div',null,h('span',null,'Customer'),h('strong',null,order.customer_name||order.customer_email)),h('div',null,h('span',null,'PayPal Transaction'),h('strong',{className:'mono'},transactionId))),h('table',null,h('thead',null,h('tr',null,h('th',null,'Item'),h('th',null,'Qty'),h('th',null,'Price'),h('th',{className:'no-print'},'Delivery'))),h('tbody',null,order.items.map((i,n)=>{const ent=entitlementFor(i.product_id);return h('tr',{key:n},h('td',null,i.title,i.data?.selectedVariant&&h('div',{className:'small muted'},i.data.selectedVariant.name||[i.data.selectedVariant.size,i.data.selectedVariant.color].filter(Boolean).join(' / '))),h('td',null,i.quantity),h('td',null,fmtMoney(i.unit_price*i.quantity,order.currency)),h('td',{className:'no-print'},i.kind==='digital'&&ent?h(Button,{className:'compact',icon:'download',disabled:ent.downloads_used>=ent.downloads_max,onClick:()=>download(i)},ent.downloads_used>=ent.downloads_max?'Limit Reached':'Download'):'Physical item'))})),h('tfoot',null,h('tr',null,h('td',{colSpan:2},'Subtotal'),h('td',null,fmtMoney(order.subtotal,order.currency)),h('td',{className:'no-print'})),h('tr',null,h('td',{colSpan:2},'Shipping'),h('td',null,fmtMoney(order.shipping,order.currency)),h('td',{className:'no-print'})),order.refunded_amount>0&&h('tr',null,h('td',{colSpan:2},'Refunded'),h('td',{className:'danger'},'-'+fmtMoney(order.refunded_amount,order.currency)),h('td',{className:'no-print'})),h('tr',null,h('td',{colSpan:2},h('strong',null,'Net Paid')),h('td',null,h('strong',null,fmtMoney(Math.max(0,Number(order.total)-Number(order.refunded_amount||0)),order.currency))),h('td',{className:'no-print'})))),order.fulfillment_status&&order.fulfillment_status!=='not_required'&&h('div',{className:'invoice-fulfillment'},h('strong',null,'Fulfillment: '),order.fulfillment_status,order.tracking_number?` · ${order.tracking_carrier||'Tracking'} ${order.tracking_number}`:''),order.branding?.supportEmail&&h('p',{className:'small muted'},'Support: ',order.branding.supportEmail),msg&&h('p',{className:'no-print small'},msg),h('div',{className:'row no-print wrap',style:{marginTop:20}},h(Button,{onClick:()=>print(),icon:'pages'},'Print / Save PDF'),h(Button,{onClick:()=>nav('/account'),icon:'user'},'My Account'),h(Button,{onClick:()=>nav('/')},'Back to Site')))}
 
-function App(){const [path,nav]=usePath();const [status,setStatus]=useState(null),[user,setUser]=useState(null),[authChecked,setAuthChecked]=useState(false);const resetRoute=location.pathname==='/admin/reset-password';const isAdmin=location.pathname.startsWith('/admin')||location.pathname.startsWith('/setup');useEffect(()=>{api('status').then(setStatus).catch(e=>setStatus({installed:true,error:e.message}))},[]);useEffect(()=>{if(status?.installed&&isAdmin){api('auth/me').then(d=>{window.__OAH_CSRF=d.csrf;setUser(d.user)}).catch(()=>setUser(null)).finally(()=>setAuthChecked(true))}else if(status)setAuthChecked(true)},[status?.installed,isAdmin]);if(location.pathname.startsWith('/order/'))return h(Receipt,{publicId:location.pathname.split('/').pop(),nav});if(!status)return h('div',{className:'auth-page'},h('div',{className:'auth-box card'},h('img',{src:'/art/oneartist-logo.svg',className:'auth-logo'}),h('p',{className:'lead'},'Starting OneArtist Hub…')));if(status.installed===false)return h(Setup,{onDone:()=>location.reload()});if(resetRoute)return h(ResetPassword,{onDone:()=>{history.replaceState({},'', '/admin');location.reload()}});if(isAdmin){if(!authChecked)return h('div',{className:'auth-page'},'Checking secure session…');return user?h(AdminShell,{user,onLogout:()=>setUser(null)}):h(Login,{onLogin:setUser})}return h(PublicSite,{path,nav})}
+
+
+function App(){const [path,nav]=usePath();const [status,setStatus]=useState(null),[user,setUser]=useState(null),[authChecked,setAuthChecked]=useState(false);const resetRoute=location.pathname==='/admin/reset-password';const isAdmin=location.pathname.startsWith('/admin')||location.pathname.startsWith('/setup');useEffect(()=>{api('status').then(setStatus).catch(e=>setStatus({installed:true,error:e.message}))},[]);useEffect(()=>{if(status?.installed&&isAdmin){api('auth/me').then(d=>{window.__OAH_CSRF=d.csrf;setUser(d.user)}).catch(()=>setUser(null)).finally(()=>setAuthChecked(true))}else if(status)setAuthChecked(true)},[status?.installed,isAdmin]);if(location.pathname.startsWith('/order/'))return h(Receipt,{publicId:location.pathname.split('/').pop(),nav});if(location.pathname==='/account')return h(CustomerAccount,{nav});if(!status)return h('div',{className:'auth-page'},h('div',{className:'auth-box card'},h('img',{src:'/art/oneartist-logo.svg',className:'auth-logo'}),h('p',{className:'lead'},'Starting OneArtist Hub…')));if(status.installed===false)return h(Setup,{onDone:()=>location.reload()});if(resetRoute)return h(ResetPassword,{onDone:()=>{history.replaceState({},'', '/admin');location.reload()}});if(isAdmin){if(!authChecked)return h('div',{className:'auth-page'},'Checking secure session…');return user?h(AdminShell,{user,onLogout:()=>setUser(null)}):h(Login,{onLogin:setUser})}return h(PublicSite,{path,nav})}
 
 createRoot(document.getElementById('root')).render(h(App));

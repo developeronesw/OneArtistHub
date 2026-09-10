@@ -37,7 +37,20 @@ if(!/auth\/forgot-password/.test(api)||!/auth\/reset-password/.test(api)||!/pass
 if(!/admin\/notifications/.test(api)||!/notification_preferences/.test(api)||!/notification-popover/.test(css)){console.error('FAIL D1 notifications center');fail=true}else console.log('PASS D1 notifications center');
 if(!/api.resend.com\/emails/.test(api)||!/admin\/email\/test/.test(api)||!/Email & Sales Notifications/.test(app)){console.error('FAIL transactional email integration');fail=true}else console.log('PASS transactional email integration');
 if(!/MIGRATION_012/.test(api)||!/ensureUpgrade012/.test(api)){console.error('FAIL automatic 0.1.2 migration');fail=true}else console.log('PASS automatic 0.1.2 migration');
-if(!/version:'0.1.2'/.test(api)||pkg.version!=='0.1.2'){console.error('FAIL 0.1.2 version markers');fail=true}else console.log('PASS 0.1.2 version markers');
+if(!/version:'0.1.3'/.test(api)||pkg.version!=='0.1.3'){console.error('FAIL 0.1.3 version markers');fail=true}else console.log('PASS 0.1.3 version markers');
+
+
+if(!/customer\/magic-link/.test(api)||!/customer\/orders/.test(api)||!/customer\/download/.test(api)||!/function CustomerAccount\(/.test(app)){console.error('FAIL passwordless customer account flow');fail=true}else console.log('PASS passwordless customer account flow');
+if(!/paypal\/webhook/.test(api)||!/verify-webhook-signature/.test(api)||!/webhook_events/.test(api)||!/PAYMENT\.CAPTURE\.PENDING/.test(api)||!/Preserve the webhook_event bytes exactly as received/.test(api)||!/PayPal Webhook Health/.test(app)){console.error('FAIL PayPal verified webhook flow');fail=true}else console.log('PASS PayPal verified webhook flow');
+if(!/order_documents/.test(api)||!/invoice_number/.test(api)||!/PAID INVOICE \/ RECEIPT/.test(app)){console.error('FAIL invoice/receipt flow');fail=true}else console.log('PASS invoice/receipt flow');
+if(!/normalizeVariants/.test(api)||!/function VariantEditor\(/.test(app)||!/selectedVariant/.test(api)){console.error('FAIL structured product variant flow');fail=true}else console.log('PASS structured product variant flow');
+if(!/admin\/customers/.test(api)||!/admin\/downloads/.test(api)||!/function Customers\(/.test(app)||!/function DownloadsAdmin\(/.test(app)){console.error('FAIL commerce admin customer/download tools');fail=true}else console.log('PASS commerce admin customer/download tools');
+if(!/refundMatch/.test(api)||!/Issue Refund/.test(app)||!/refunded_amount/.test(api)){console.error('FAIL refund workflow');fail=true}else console.log('PASS refund workflow');
+if(!/Refund pending/.test(api)||!/transactionByProvider/.test(api)||!/d.pending/.test(app)){console.error('FAIL pending-refund webhook reconciliation');fail=true}else console.log('PASS pending-refund webhook reconciliation');
+if(!/MIGRATION_013/.test(api)||!/ensureUpgrade013/.test(api)){console.error('FAIL automatic 0.1.3 migration');fail=true}else console.log('PASS automatic 0.1.3 migration');
+if(!/idx_order_transactions_provider_id/.test(api)){console.error('FAIL PayPal transaction idempotency index');fail=true}else console.log('PASS PayPal transaction idempotency index');
+if(!/webhookId/.test(app)||!/admin\/paypal\/config/.test(api)){console.error('FAIL safe PayPal webhook configuration UI');fail=true}else console.log('PASS safe PayPal webhook configuration UI');
+if(!/paypalCaptureOrRecover/.test(api)||!/waitForFinalizedOrder/.test(api)||!/PayPal payment is not fully captured yet/.test(api)||!/recovered:cap.recovered/.test(api)){console.error('FAIL PayPal capture race recovery');fail=true}else console.log('PASS PayPal capture race recovery');
 
 const pbkdf2Iterations=Number((api.match(/iterations:(\d+)/)||[])[1]||0);
 if(!pbkdf2Iterations||pbkdf2Iterations>100000){console.error('FAIL Cloudflare PBKDF2 iteration limit',pbkdf2Iterations);fail=true}else console.log('PASS Cloudflare PBKDF2 iteration limit',pbkdf2Iterations);

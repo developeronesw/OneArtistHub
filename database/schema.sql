@@ -78,3 +78,33 @@ CREATE TABLE IF NOT EXISTS email_log (
   provider TEXT, provider_message_id TEXT, error TEXT, created_at TEXT NOT NULL, sent_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_email_log_created ON email_log(created_at DESC);
+
+-- OneArtist Hub 0.1.3 — commerce + customer accounts
+CREATE TABLE IF NOT EXISTS customer_magic_tokens (
+  token_hash TEXT PRIMARY KEY, email TEXT NOT NULL, expires_at TEXT NOT NULL, used_at TEXT, created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_customer_magic_email ON customer_magic_tokens(email,created_at DESC);
+CREATE TABLE IF NOT EXISTS customer_sessions (
+  id TEXT PRIMARY KEY, email TEXT NOT NULL, expires_at TEXT NOT NULL, created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_customer_sessions_email ON customer_sessions(email);
+CREATE TABLE IF NOT EXISTS webhook_events (
+  event_id TEXT PRIMARY KEY, event_type TEXT NOT NULL, status TEXT NOT NULL, payload TEXT NOT NULL,
+  created_at TEXT NOT NULL, processed_at TEXT, error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_webhook_events_created ON webhook_events(created_at DESC);
+CREATE TABLE IF NOT EXISTS order_transactions (
+  id TEXT PRIMARY KEY, order_id TEXT NOT NULL, provider TEXT NOT NULL, type TEXT NOT NULL, provider_id TEXT,
+  status TEXT NOT NULL, amount REAL NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'USD',
+  data TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL,
+  FOREIGN KEY(order_id) REFERENCES orders(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_order_transactions_order ON order_transactions(order_id,created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_order_transactions_provider_id ON order_transactions(provider,type,provider_id) WHERE provider_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS order_documents (
+  order_id TEXT PRIMARY KEY, invoice_number TEXT NOT NULL UNIQUE, refunded_amount REAL NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  FOREIGN KEY(order_id) REFERENCES orders(id) ON DELETE CASCADE
+);
+INSERT OR IGNORE INTO order_documents(order_id,invoice_number,refunded_amount,created_at,updated_at)
+SELECT id,'OAH-'||replace(substr(created_at,1,10),'-','')||'-'||upper(substr(hex(randomblob(4)),1,8)),0,created_at,created_at FROM orders;

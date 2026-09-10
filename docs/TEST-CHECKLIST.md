@@ -1,107 +1,104 @@
-# OneArtist Hub 0.1.1 Test Checklist
+# OneArtist Hub 0.1.3 Test Checklist
 
-## Deployment / upgrade
-- [ ] Existing D1 database is preserved
-- [ ] Existing Cloudflare secrets/bindings are preserved
-- [ ] Update ZIP is extracted into repository root with overwrite enabled
+## Deployment / migration
+- [ ] Existing D1 database, administrator, content, analytics and encrypted integrations are preserved
 - [ ] `npm run check` passes
 - [ ] `npm run build` passes
-- [ ] Git push triggers successful Cloudflare Pages deployment
-- [ ] `/api/status` returns version `0.1.1`
+- [ ] Cloudflare Pages deployment succeeds
+- [ ] `/api/status` returns version `0.1.3`
+- [ ] No installer rerun or manual D1 recreation is required
 
-## Setup/Auth regression
-- [ ] Existing administrator can still log in
-- [ ] Logout invalidates administrator session
-- [ ] Existing analytics and demo/live content remain present
+## Admin / Aurora regression
+- [ ] Admin login/logout still works
+- [ ] Forgot password still works
+- [ ] Aurora desktop sidebar, mobile drawer and mobile dock work
+- [ ] Releases, tracks, videos, tour dates, store, pages and media CRUD still work
+- [ ] All three public themes still activate instantly without redeploy
+- [ ] Glass continuous player, queue, shuffle, repeat, volume and verified play counters still work
 
-## Aurora Dashboard
-- [ ] Desktop sidebar usable
-- [ ] Tablet/mobile drawer usable
-- [ ] Mobile bottom dock usable and More opens the full drawer
-- [ ] Revenue, Orders, Releases, Verified Plays, Downloads and Site Views render
-- [ ] 30-day verified engagement chart still uses live D1 data
-- [ ] New Release opens the release editor immediately
-- [ ] Add Video opens the video editor immediately
-- [ ] Add Tour Date opens the tour editor immediately
-- [ ] Create Page opens the page editor immediately
+## Commerce dashboard
+- [ ] Net Revenue reflects refunds
+- [ ] Gross revenue / refund snapshot renders
+- [ ] Order count renders
+- [ ] Customer count renders
+- [ ] Average order value renders
+- [ ] Top Products renders from verified order items
+- [ ] Digital vs physical sales split renders
 
-## Releases CRUD
-- [ ] Create release and publish
-- [ ] Create release as draft
-- [ ] Edit title/type/date/cover/description/streaming links
-- [ ] Toggle published ↔ draft from list
-- [ ] Feature/unfeature release
-- [ ] Bulk delete selected releases
-- [ ] Deleting a release also removes its linked track records
+## Product variants / inventory
+- [ ] Create a physical product with two or more size/color variants
+- [ ] Save independent SKU and inventory for each variant
+- [ ] Optional variant price override works
+- [ ] Public store requires a valid variant selection
+- [ ] Sold-out variants cannot be selected/purchased
+- [ ] Checkout ignores client-supplied prices and uses current D1 prices
+- [ ] Inventory is checked again before capture finalization
+- [ ] Verified purchase decrements the selected variant only
+- [ ] Low inventory creates dashboard/email notification when enabled
 
-## Tracks CRUD
-- [ ] Create track using release dropdown
-- [ ] Release dropdown shows existing releases
-- [ ] Save preview audio URL
-- [ ] Save track number/duration/cover/price/explicit flag
-- [ ] Edit track
-- [ ] Publish/draft track
-- [ ] Delete track
-- [ ] Continuous player can play newly created published preview
-- [ ] Play counter increments after verified listening threshold
+## PayPal checkout / webhook
+- [ ] PayPal client secret can remain blank when saving only Webhook ID/settings
+- [ ] Webhook listener is `/api/paypal/webhook`
+- [ ] Webhook ID is saved encrypted with the PayPal integration
+- [ ] CHECKOUT.ORDER.APPROVED test event is verified and processed
+- [ ] PAYMENT.CAPTURE.COMPLETED test event is verified and processed
+- [ ] PAYMENT.CAPTURE.DENIED / approval-reversed events update order status when applicable
+- [ ] PAYMENT.CAPTURE.REFUNDED updates refund totals once
+- [ ] Duplicate webhook delivery does not duplicate transactions/refunds
+- [ ] PayPal Webhook Health shows processed/failed status
 
-## Videos CRUD
-- [ ] New Video accepts standard YouTube watch URL
-- [ ] New Video accepts youtu.be URL
-- [ ] New Video accepts Shorts URL
-- [ ] Fetch YouTube fills metadata when available
-- [ ] Thumbnail appears before save
-- [ ] Saved public card uses stored/derived YouTube thumbnail
-- [ ] Public click opens responsive YouTube modal
-- [ ] Video view counter records the modal open
-- [ ] Edit/delete video
+## Orders / invoices / fulfillment
+- [ ] Captured payment creates stable OneArtist invoice number
+- [ ] Receipt shows customer, date, status and PayPal transaction/order ID
+- [ ] Printable / Save PDF receipt works
+- [ ] Physical order retains PayPal shipping address
+- [ ] Processing / Shipped / Delivered status saves
+- [ ] Carrier and tracking number save
+- [ ] Shipping/tracking email sends when configured
 
-## Tour CRUD
-- [ ] Create show with date, venue, location, ticket URL, status and time
-- [ ] Edit show
-- [ ] Draft/publish show
-- [ ] Delete show
-- [ ] Homepage shows only next 3 upcoming shows
-- [ ] Tour page shows all upcoming published shows
+## Refunds
+- [ ] Partial refund can be issued from Admin → Orders
+- [ ] Full remaining refund can be issued by leaving amount blank
+- [ ] Refunded amount appears on invoice/customer account/dashboard
+- [ ] Customer receives refund email when email is configured
+- [ ] Full refund prevents future digital-download allowance
 
-## Store CRUD
-- [ ] Create physical product with price/inventory/SKU/variants
-- [ ] Create digital product with Dropbox private path
-- [ ] Edit product
-- [ ] Draft/publish product
-- [ ] Delete product
-- [ ] Homepage shows latest 4 products
-- [ ] Shop page shows full published catalog
+## Customer accounts
+- [ ] `/account` opens passwordless My Account
+- [ ] Unknown email receives generic response without account disclosure
+- [ ] Purchase email receives one-time magic link when email is configured
+- [ ] Magic link expires after 20 minutes
+- [ ] Magic link works only once
+- [ ] Successful sign-in creates secure customer session
+- [ ] Customer sees only orders for their email
+- [ ] Customer can log out
 
-## Custom Pages
-- [ ] Create custom page
-- [ ] Page can be added/removed from public navigation
-- [ ] HTML saves and renders
-- [ ] `<script>` is stripped server-side
-- [ ] inline event handlers are stripped server-side
-- [ ] Edit/delete page
+## Digital downloads
+- [ ] Verified digital purchase creates entitlement
+- [ ] My Account shows download usage / limit
+- [ ] Download request creates a new 15-minute one-time URL
+- [ ] Dropbox permanent credential/path is not exposed to customer
+- [ ] Successful file request increments download counter
+- [ ] Reusing a consumed/expired token fails
+- [ ] Admin → Downloads can reset entitlement count and invalidate old tokens
 
-## Themes
-- [ ] Midnight Cinema preview opens
-- [ ] Artist OS preview opens
-- [ ] Neon Editorial preview opens
-- [ ] Activate each theme from Admin → Themes
-- [ ] Activation changes public site without GitHub commit/redeploy
-- [ ] Existing releases/videos/tours/store/pages remain intact after each switch
+## Customers
+- [ ] Admin → Customers shows customer name/email/order count
+- [ ] Lifetime Value is net of refunds
+- [ ] Last-order timestamp is correct
 
-## Public catalog behavior
-- [ ] Homepage shows latest 3 releases
-- [ ] Homepage shows latest 3 videos
-- [ ] Homepage shows latest 3 upcoming tour dates
-- [ ] Homepage shows latest 4 products
-- [ ] Music page shows all published releases
-- [ ] Videos page shows all published videos
-- [ ] Shop page shows all published products
-- [ ] Continuous player survives client-side navigation
+## Security / design contract
+- [ ] Admin writes still require CSRF
+- [ ] Admin and customer session cookies are HttpOnly + Secure + SameSite=Lax
+- [ ] PBKDF2 remains at or below Cloudflare 100,000-iteration runtime limit
+- [ ] PayPal/Dropbox/Resend secrets are not exposed in frontend/GitHub
+- [ ] Built-in icons/logos remain SVG-only
+- [ ] New commerce/customer UI is responsive on phone, tablet and desktop
 
-## SVG / responsive contract
-- [ ] Built-in UI icons remain SVG paths
-- [ ] Built-in logo remains SVG
-- [ ] No raster UI icon/logo was introduced
-- [ ] Button icons remain vertically/horizontally centered
-- [ ] CRUD modals remain usable on phone/tablet/desktop
+### PayPal capture concurrency
+
+- [ ] Complete a Sandbox purchase while the PayPal webhook is enabled.
+- [ ] Confirm exactly one OneArtist Hub order is created.
+- [ ] Confirm inventory decrements exactly once.
+- [ ] Confirm the browser reaches the receipt even when the webhook processes first.
+- [ ] Confirm `PAYMENT.CAPTURE.COMPLETED` is stored once in Webhook Health.

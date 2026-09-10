@@ -1,9 +1,9 @@
-# OneArtist Hub 0.1.2 — Glass Player, Identity & Notifications
+# OneArtist Hub 0.1.3 — Commerce & Customer Accounts
 
 **Official admin design:** Aurora Glass Studio  
 **Public themes:** Midnight Cinema, Artist OS, Neon Editorial
 
-OneArtist Hub is a responsive artist CMS, storefront, continuous music player and serverless backend. This premium communications release uses **Cloudflare Pages + Pages Functions + D1** for the recommended deployment profile. No PHP, MySQL or VPS is required for this profile.
+OneArtist Hub is a responsive artist CMS, storefront, continuous music player and serverless backend. This commerce release uses **Cloudflare Pages + Pages Functions + D1** for the recommended deployment profile. No PHP, MySQL or VPS is required for this profile.
 
 ## What is functional in this build
 
@@ -17,6 +17,15 @@ OneArtist Hub is a responsive artist CMS, storefront, continuous music player an
 - Aurora notification bell backed by D1 with sale, inventory and security events
 - Resend transactional email adapter, test-email tool and configurable sender identity
 - Customer purchase receipt/download emails and artist new-sale emails
+- Passwordless customer My Account portal using one-time email magic links
+- Customer order history with branded printable invoices/receipts, refunds, fulfillment and tracking
+- Secure customer My Downloads with rotating 15-minute one-time links and admin entitlement resets
+- PayPal webhook signature verification with idempotent event processing, server-side capture fallback and concurrent browser/webhook race recovery
+- PayPal partial/full refunds with refund-aware revenue and customer email notification
+- Structured physical-product variants with size/color/SKU/price override and per-variant inventory
+- Server-verified inventory decrement and low-stock alerts after captured payment
+- Customer, download-entitlement and webhook-health administration screens
+- Commerce dashboard metrics for net/gross revenue, refunds, customers, AOV, top products and digital/physical sales
 - Customer shipping/tracking emails when fulfillment is updated
 - Administrator password change, administrator email change and old-session invalidation
 - Real D1-backed counters for verified audio plays, page/site views and protected downloads
@@ -69,7 +78,7 @@ After the binding and secrets are added, redeploy and visit:
 
 The installer creates the D1 schema itself. You do **not** have to paste SQL manually for the normal installation path.
 
-See `docs/CLOUDFLARE-SETUP.md` for the browser-only walkthrough.
+See `docs/CLOUDFLARE-SETUP.md` for the browser-only walkthrough and `docs/COMMERCE-0.1.3.md` for PayPal webhook/customer-account setup.
 
 ## Never put these in GitHub
 
@@ -109,4 +118,4 @@ OneArtist Hub 0.1.2 supports Resend through the server-side REST API. Configure 
 
 ## Version
 
-0.1.2 Glass Player, Identity & Notifications — September 9, 2026
+0.1.3 Commerce & Customer Accounts — September 9, 2026
