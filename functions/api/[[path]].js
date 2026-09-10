@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS notification_preferences (id INTEGER PRIMARY KEY CHEC
 INSERT OR IGNORE INTO notification_preferences(id,updated_at) VALUES(1,datetime('now'));
 CREATE TABLE IF NOT EXISTS email_log (id TEXT PRIMARY KEY, recipient TEXT NOT NULL, template TEXT NOT NULL, subject TEXT NOT NULL, status TEXT NOT NULL, provider TEXT, provider_message_id TEXT, error TEXT, created_at TEXT NOT NULL, sent_at TEXT);
 CREATE INDEX IF NOT EXISTS idx_email_log_created ON email_log(created_at DESC);
+CREATE TABLE IF NOT EXISTS email_queue (id TEXT PRIMARY KEY, recipient TEXT NOT NULL, template TEXT NOT NULL, subject TEXT NOT NULL, html TEXT NOT NULL, text_body TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at TEXT NOT NULL, last_error TEXT, provider TEXT, provider_message_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, sent_at TEXT);
+CREATE INDEX IF NOT EXISTS idx_email_queue_due ON email_queue(status,next_attempt_at);
 CREATE TABLE IF NOT EXISTS customer_magic_tokens (token_hash TEXT PRIMARY KEY, email TEXT NOT NULL, expires_at TEXT NOT NULL, used_at TEXT, created_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_customer_magic_email ON customer_magic_tokens(email,created_at DESC);
 CREATE TABLE IF NOT EXISTS customer_sessions (id TEXT PRIMARY KEY, email TEXT NOT NULL, expires_at TEXT NOT NULL, created_at TEXT NOT NULL);
@@ -46,7 +48,9 @@ CREATE INDEX IF NOT EXISTS idx_notifications_created ON notifications(created_at
 CREATE TABLE IF NOT EXISTS notification_preferences (id INTEGER PRIMARY KEY CHECK(id=1), new_order INTEGER NOT NULL DEFAULT 1, digital_sale INTEGER NOT NULL DEFAULT 1, physical_sale INTEGER NOT NULL DEFAULT 1, shipping_updates INTEGER NOT NULL DEFAULT 1, security_alerts INTEGER NOT NULL DEFAULT 1, low_inventory INTEGER NOT NULL DEFAULT 1, low_inventory_threshold INTEGER NOT NULL DEFAULT 5, updated_at TEXT NOT NULL);
 INSERT OR IGNORE INTO notification_preferences(id,updated_at) VALUES(1,datetime('now'));
 CREATE TABLE IF NOT EXISTS email_log (id TEXT PRIMARY KEY, recipient TEXT NOT NULL, template TEXT NOT NULL, subject TEXT NOT NULL, status TEXT NOT NULL, provider TEXT, provider_message_id TEXT, error TEXT, created_at TEXT NOT NULL, sent_at TEXT);
-CREATE INDEX IF NOT EXISTS idx_email_log_created ON email_log(created_at DESC);`;
+CREATE INDEX IF NOT EXISTS idx_email_log_created ON email_log(created_at DESC);
+CREATE TABLE IF NOT EXISTS email_queue (id TEXT PRIMARY KEY, recipient TEXT NOT NULL, template TEXT NOT NULL, subject TEXT NOT NULL, html TEXT NOT NULL, text_body TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at TEXT NOT NULL, last_error TEXT, provider TEXT, provider_message_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, sent_at TEXT);
+CREATE INDEX IF NOT EXISTS idx_email_queue_due ON email_queue(status,next_attempt_at);`;
 let upgrade012Ready=false;
 async function ensureUpgrade012(env){ if(upgrade012Ready)return; await env.DB.exec(MIGRATION_012); upgrade012Ready=true; }
 const MIGRATION_013 = `
@@ -70,6 +74,12 @@ CREATE INDEX IF NOT EXISTS idx_media_objects_visibility ON media_objects(visibil
 let upgrade020Ready=false;
 async function ensureUpgrade020(env){ if(upgrade020Ready)return; await env.DB.exec(MIGRATION_020); upgrade020Ready=true; }
 
+const MIGRATION_022 = `
+CREATE TABLE IF NOT EXISTS email_queue (id TEXT PRIMARY KEY, recipient TEXT NOT NULL, template TEXT NOT NULL, subject TEXT NOT NULL, html TEXT NOT NULL, text_body TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at TEXT NOT NULL, last_error TEXT, provider TEXT, provider_message_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, sent_at TEXT);
+CREATE INDEX IF NOT EXISTS idx_email_queue_due ON email_queue(status,next_attempt_at);`;
+let upgrade022Ready=false;
+async function ensureUpgrade022(env){ if(upgrade022Ready)return; await env.DB.exec(MIGRATION_022); upgrade022Ready=true; }
+
 
 const ALLOWED_TYPES = new Set(['release','track','video','tour','product','page','media','news']);
 const json = (data, status=200, extra={}) => new Response(JSON.stringify(data), {status, headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...extra}});
@@ -91,12 +101,37 @@ const sanitizeHtml = v => cleanText(v,50000)
 
 const safeFileName=v=>cleanText(v,180).replace(/[\\/:*?"<>|]+/g,'-').replace(/\s+/g,' ').replace(/^\.+|\.+$/g,'')||'file';
 async function dropboxConfig(env){const r=await env.DB.prepare(`SELECT data_enc FROM integrations WHERE provider='dropbox'`).first();return r?decrypt(env,r.data_enc):null;}
+async function s3Config(env){const r=await env.DB.prepare(`SELECT data_enc FROM integrations WHERE provider='s3'`).first();return r?decrypt(env,r.data_enc):null;}
+const utf8=v=>new TextEncoder().encode(String(v));
+async function hmac(key,data,raw=false){const k=await crypto.subtle.importKey('raw',key instanceof Uint8Array?key:utf8(key),{name:'HMAC',hash:'SHA-256'},false,['sign']);const out=new Uint8Array(await crypto.subtle.sign('HMAC',k,utf8(data)));return raw?out:hex(out)}
+const amzEncode=v=>encodeURIComponent(v).replace(/[!'()*]/g,c=>'%'+c.charCodeAt(0).toString(16).toUpperCase());
+function s3Url(cfg,key=''){
+  const endpoint=String(cfg.endpoint||'').replace(/\/+$/,''); if(!/^https:\/\//i.test(endpoint))throw new Error('S3 endpoint must use HTTPS.');
+  const bucket=cleanText(cfg.bucket,128).trim(); if(!bucket)throw new Error('S3 bucket is missing.');
+  const encoded=String(key).split('/').map(amzEncode).join('/');
+  if(cfg.forcePathStyle!==false)return new URL(`${endpoint}/${amzEncode(bucket)}/${encoded}`);
+  const u=new URL(endpoint);u.hostname=`${bucket}.${u.hostname}`;u.pathname='/'+encoded;return u;
+}
+async function s3Request(env,method,key,bytes=null,contentType='application/octet-stream'){
+  const cfg=await s3Config(env);if(!cfg?.accessKeyId||!cfg?.secretAccessKey||!cfg?.bucket||!cfg?.endpoint)throw new Error('S3-compatible storage is not configured.');
+  const url=s3Url(cfg,key), region=cleanText(cfg.region||'us-east-1',64)||'us-east-1', service='s3', d=new Date(), stamp=d.toISOString().replace(/[:-]|\.\d{3}/g,''), date=stamp.slice(0,8);
+  const payload=bytes==null?new Uint8Array():bytes instanceof Uint8Array?bytes:new Uint8Array(bytes), payloadHash=hex(await crypto.subtle.digest('SHA-256',payload));
+  const headers={'host':url.host,'x-amz-content-sha256':payloadHash,'x-amz-date':stamp}; if(method==='PUT')headers['content-type']=contentType;
+  const names=Object.keys(headers).sort(), canonicalHeaders=names.map(k=>`${k}:${String(headers[k]).trim()}\n`).join(''), signedHeaders=names.join(';');
+  const canonicalRequest=[method,url.pathname,url.searchParams.toString(),canonicalHeaders,signedHeaders,payloadHash].join('\n'), scope=`${date}/${region}/${service}/aws4_request`, requestHash=hex(await crypto.subtle.digest('SHA-256',utf8(canonicalRequest)));
+  const kDate=await hmac(utf8('AWS4'+cfg.secretAccessKey),date,true), kRegion=await hmac(kDate,region,true), kService=await hmac(kRegion,service,true), kSigning=await hmac(kService,'aws4_request',true), signature=await hmac(kSigning,`AWS4-HMAC-SHA256\n${stamp}\n${scope}\n${requestHash}`);
+  const auth=`AWS4-HMAC-SHA256 Credential=${cfg.accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+  const outHeaders={authorization:auth,'x-amz-content-sha256':payloadHash,'x-amz-date':stamp};if(method==='PUT')outHeaders['content-type']=contentType;
+  return fetch(url,{method,headers:outHeaders,body:method==='PUT'?payload:undefined});
+}
 async function storageSettings(env){const s=await getSettings(env);return s.storage||{provider:env.MEDIA?'r2':env.LOCAL_STORAGE?'local':'dropbox'};}
 async function putStoredObject(env,{bytes,filename,contentType='application/octet-stream',visibility='private',folder='media',provider=''}){
   const cfg=await storageSettings(env), chosen=provider||cfg.provider||(env.MEDIA?'r2':'dropbox'), objectId=id(), safe=safeFileName(filename), key=`oneartist/${cleanSlug(folder)||'media'}/${objectId}-${safe}`;
   if(chosen==='r2'){
     if(!env.MEDIA)throw new Error('R2 binding MEDIA is not configured. Add an R2 bucket binding named MEDIA or choose another storage provider.');
     await env.MEDIA.put(key,bytes,{httpMetadata:{contentType},customMetadata:{filename:safe,visibility}});
+  }else if(chosen==='s3'){
+    const r=await s3Request(env,'PUT',key,bytes,contentType);if(!r.ok)throw new Error(`S3 upload failed (${r.status}).`);
   }else if(chosen==='dropbox'){
     const db=await dropboxConfig(env);if(!db?.accessToken)throw new Error('Dropbox is not configured.');const path='/'+key;
     const r=await fetch('https://content.dropboxapi.com/2/files/upload',{method:'POST',headers:{authorization:`Bearer ${db.accessToken}`,'Dropbox-API-Arg':JSON.stringify({path,mode:'overwrite',autorename:false,mute:true}),'content-type':'application/octet-stream'},body:bytes});
@@ -110,9 +145,73 @@ async function putStoredObject(env,{bytes,filename,contentType='application/octe
 }
 async function getStoredObject(env,row){
   if(row.storage_provider==='r2'){if(!env.MEDIA)return null;const obj=await env.MEDIA.get(row.storage_key);if(!obj)return null;return {body:obj.body,contentType:obj.httpMetadata?.contentType||row.content_type||'application/octet-stream'};}
+  if(row.storage_provider==='s3'){const r=await s3Request(env,'GET',row.storage_key);if(!r.ok)return null;return {body:r.body,contentType:row.content_type||r.headers.get('content-type')||'application/octet-stream'};}
   if(row.storage_provider==='dropbox'){const db=await dropboxConfig(env);if(!db?.accessToken)return null;const r=await fetch('https://content.dropboxapi.com/2/files/download',{method:'POST',headers:{authorization:`Bearer ${db.accessToken}`,'Dropbox-API-Arg':JSON.stringify({path:'/'+row.storage_key})}});if(!r.ok)return null;return {body:r.body,contentType:row.content_type||r.headers.get('content-type')||'application/octet-stream'};}
   if(row.storage_provider==='local'){if(!env.LOCAL_STORAGE?.get)return null;const obj=await env.LOCAL_STORAGE.get(row.storage_key);if(!obj)return null;return {body:obj.body,contentType:obj.contentType||row.content_type||'application/octet-stream'};}
   return null;
+}
+
+
+function mediaTypeFor(contentType='',filename=''){
+  const c=String(contentType||'').toLowerCase(),f=String(filename||'').toLowerCase();
+  if(c.startsWith('image/')||/\.(jpe?g|png|webp|gif)$/i.test(f))return 'image';
+  if(c.startsWith('audio/')||/\.(mp3|wav|m4a|aac|ogg|flac)$/i.test(f))return 'audio';
+  if(c.startsWith('video/')||/\.(mp4|webm|mov|m4v)$/i.test(f))return 'video';
+  return 'document';
+}
+function normalizeMediaContentType(contentType='',filename=''){
+  const c=cleanText(contentType,160).toLowerCase().split(';')[0].trim();if(c&&c!=='application/octet-stream')return c;
+  const f=String(filename||'').toLowerCase(),map={'.jpg':'image/jpeg','.jpeg':'image/jpeg','.png':'image/png','.webp':'image/webp','.gif':'image/gif','.mp3':'audio/mpeg','.wav':'audio/wav','.m4a':'audio/mp4','.aac':'audio/aac','.ogg':'audio/ogg','.flac':'audio/flac','.mp4':'video/mp4','.webm':'video/webm','.mov':'video/quicktime','.m4v':'video/x-m4v','.pdf':'application/pdf','.txt':'text/plain','.zip':'application/zip'};
+  const ext=Object.keys(map).find(x=>f.endsWith(x));return ext?map[ext]:(c||'application/octet-stream');
+}
+function publicMediaAllowed(contentType='',filename=''){
+  const c=String(contentType||'').toLowerCase(),f=String(filename||'').toLowerCase();
+  return c.startsWith('image/jpeg')||c.startsWith('image/png')||c.startsWith('image/webp')||c.startsWith('image/gif')||
+    c.startsWith('audio/')||c.startsWith('video/')||c==='application/pdf'||c==='text/plain'||
+    /\.(jpe?g|png|webp|gif|mp3|wav|m4a|aac|ogg|flac|mp4|webm|mov|m4v|pdf|txt)$/i.test(f);
+}
+function mediaFolder(storageKey=''){
+  const parts=String(storageKey||'').split('/').filter(Boolean);
+  return parts[0]==='oneartist'&&parts[1]?parts[1]:'media';
+}
+async function mediaMetaRows(env){
+  const {results=[]}=await env.DB.prepare(`SELECT id,title,data,created_at,updated_at FROM content_items WHERE type='media' ORDER BY created_at DESC LIMIT 1000`).all();
+  return results.map(contentRow);
+}
+async function upsertMediaMeta(env,row,{title='',alt=''}={}){
+  const metas=await mediaMetaRows(env),existing=metas.find(x=>x.data?.mediaObjectId===row.id),display=cleanText(title||existing?.title||row.filename,250)||row.filename;
+  const data={...(existing?.data||{}),mediaObjectId:row.id,url:row.visibility==='public'?`/api/media/file/${row.id}`:'',alt:cleanText(alt??existing?.data?.alt??'',1000),mediaType:mediaTypeFor(row.content_type,row.filename),folder:mediaFolder(row.storage_key),contentType:row.content_type||'',sizeBytes:Number(row.size_bytes||0),provider:row.storage_provider,visibility:row.visibility};
+  if(existing){await env.DB.prepare('UPDATE content_items SET title=?,slug=?,data=?,updated_at=? WHERE id=?').bind(display,cleanSlug(display),JSON.stringify(data),now(),existing.id).run();return existing.id;}
+  const cid=id();await env.DB.prepare(`INSERT INTO content_items(id,type,slug,title,status,sort_date,featured,data,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`).bind(cid,'media',cleanSlug(display),display,'published',null,0,JSON.stringify(data),now(),now()).run();return cid;
+}
+async function mediaLibraryItems(env,{kind='',visibility=''}={}){
+  const {results=[]}=await env.DB.prepare('SELECT * FROM media_objects ORDER BY created_at DESC LIMIT 1000').all();
+  const metas=await mediaMetaRows(env),metaMap=new Map();for(const m of metas)if(m.data?.mediaObjectId)metaMap.set(m.data.mediaObjectId,m);
+  const [contentRefs,settingRefs]=await Promise.all([env.DB.prepare(`SELECT id,type,title,data FROM content_items WHERE type<>'media'`).all(),env.DB.prepare('SELECT key,value FROM settings').all()]);
+  const refStrings=[...(contentRefs.results||[]).map(x=>`${x.id} ${x.type} ${x.title} ${x.data}`),...(settingRefs.results||[]).map(x=>`${x.key} ${x.value}`)];
+  return results.map(row=>{
+    const meta=metaMap.get(row.id),type=mediaTypeFor(row.content_type,row.filename),url=row.visibility==='public'?`/api/media/file/${row.id}`:'',needle=row.id;
+    const usageCount=refStrings.reduce((n,t)=>n+(String(t).includes(needle)?1:0),0);
+    return {id:row.id,filename:row.filename,title:meta?.title||row.filename.replace(/\.[^.]+$/,''),alt:meta?.data?.alt||'',contentType:row.content_type||'',sizeBytes:Number(row.size_bytes||0),visibility:row.visibility,provider:row.storage_provider,folder:mediaFolder(row.storage_key),mediaType:type,url,usageCount,createdAt:row.created_at};
+  }).filter(x=>(!kind||x.mediaType===kind)&&(!visibility||x.visibility===visibility));
+}
+async function deleteStoredObject(env,row){
+  if(row.storage_provider==='r2'){
+    if(!env.MEDIA?.delete)throw new Error('R2 binding MEDIA is unavailable.');
+    await env.MEDIA.delete(row.storage_key);return;
+  }
+  if(row.storage_provider==='s3'){const r=await s3Request(env,'DELETE',row.storage_key);if(!r.ok&&r.status!==404)throw new Error(`S3 delete failed (${r.status}).`);return;}
+  if(row.storage_provider==='dropbox'){
+    const db=await dropboxConfig(env);if(!db?.accessToken)throw new Error('Dropbox is not configured.');
+    const r=await fetch('https://api.dropboxapi.com/2/files/delete_v2',{method:'POST',headers:{authorization:`Bearer ${db.accessToken}`,'content-type':'application/json'},body:JSON.stringify({path:'/'+row.storage_key})});
+    if(!r.ok){let msg='Dropbox delete failed.',notFound=false;try{const j=await r.json();msg=cleanText(j.error_summary||msg,500);notFound=/not_found/i.test(JSON.stringify(j))}catch{}if(!notFound)throw new Error(msg)}
+    return;
+  }
+  if(row.storage_provider==='local'){
+    if(!env.LOCAL_STORAGE?.delete)throw new Error('Local storage delete support is unavailable.');
+    await env.LOCAL_STORAGE.delete(row.storage_key);return;
+  }
+  throw new Error('Unsupported storage provider.');
 }
 
 async function body(req){ try{return await req.json()}catch{return {}} }
@@ -156,18 +255,29 @@ const htmlEscape=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;'
 async function emailConfig(env){ const r=await env.DB.prepare(`SELECT data_enc FROM integrations WHERE provider='email'`).first(); return r?decrypt(env,r.data_enc):null; }
 async function notificationPrefs(env){ const r=await env.DB.prepare('SELECT * FROM notification_preferences WHERE id=1').first(); return r||{new_order:1,digital_sale:1,physical_sale:1,shipping_updates:1,security_alerts:1,low_inventory:1,low_inventory_threshold:5}; }
 async function createNotification(env,type,title,message,link=''){ await env.DB.prepare('INSERT INTO notifications(id,type,title,message,link,is_read,created_at) VALUES(?,?,?,?,?,0,?)').bind(id(),cleanText(type,40),cleanText(title,180),cleanText(message,1200),cleanText(link,80)||null,now()).run(); }
+async function deliverEmail(env,cfg,{to,subject,html,text=''}){
+  const provider=cfg.service||'resend';let providerId='';
+  if(provider==='resend'){
+    if(!cfg.apiKey)throw new Error('Resend API key is missing.');const from=cfg.fromName?`${cleanText(cfg.fromName,120)} <${cleanText(cfg.fromEmail,220)}>`:cleanText(cfg.fromEmail,220);const payload={from,to:[cleanText(to,220)],subject:cleanText(subject,300),html:String(html||''),text:cleanText(text,10000)};if(cfg.replyTo)payload.reply_to=cleanText(cfg.replyTo,220);const r=await fetch('https://api.resend.com/emails',{method:'POST',headers:{authorization:`Bearer ${cfg.apiKey}`,'content-type':'application/json'},body:JSON.stringify(payload)});let j={};try{j=await r.json()}catch{}if(!r.ok)throw new Error(cleanText(j.message||j.error||`Resend returned ${r.status}`,500));providerId=cleanText(j.id||'',160);
+  }else if(provider==='brevo'){
+    if(!cfg.apiKey)throw new Error('Brevo API key is missing.');const payload={sender:{email:cleanText(cfg.fromEmail,220),name:cleanText(cfg.fromName||'',120)},to:[{email:cleanText(to,220)}],subject:cleanText(subject,300),htmlContent:String(html||''),textContent:cleanText(text,10000)};if(cfg.replyTo)payload.replyTo={email:cleanText(cfg.replyTo,220)};const r=await fetch('https://api.brevo.com/v3/smtp/email',{method:'POST',headers:{'api-key':cfg.apiKey,'content-type':'application/json','accept':'application/json'},body:JSON.stringify(payload)});let j={};try{j=await r.json()}catch{}if(!r.ok)throw new Error(cleanText(j.message||`Brevo returned ${r.status}`,500));providerId=cleanText(j.messageId||'',160);
+  }else if(provider==='cloudflare'){
+    if(!cfg.accountId||!cfg.apiToken)throw new Error('Cloudflare Email account ID or API token is missing.');const payload={to:cleanText(to,220),from:cfg.fromName?{address:cleanText(cfg.fromEmail,220),name:cleanText(cfg.fromName,120)}:cleanText(cfg.fromEmail,220),subject:cleanText(subject,300),html:String(html||''),text:cleanText(text,10000)};if(cfg.replyTo)payload.replyTo=cleanText(cfg.replyTo,220);const r=await fetch(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(cfg.accountId)}/email/sending/send`,{method:'POST',headers:{authorization:`Bearer ${cfg.apiToken}`,'content-type':'application/json'},body:JSON.stringify(payload)});let j={};try{j=await r.json()}catch{}if(!r.ok||j.success===false)throw new Error(cleanText(j.errors?.[0]?.message||`Cloudflare Email returned ${r.status}`,500));providerId=cleanText(j.result?.message_id||j.result?.delivered?.[0]||j.result?.queued?.[0]||'',160);
+  }else if(provider==='smtp'){
+    if(!env.SMTP_SEND)throw new Error('SMTP is available only on the self-hosted/VPS runtime.');const r=await env.SMTP_SEND({config:cfg,to:cleanText(to,220),subject:cleanText(subject,300),html:String(html||''),text:cleanText(text,10000)});providerId=cleanText(r?.messageId||'',160);
+  }else throw new Error('Unsupported email service.');
+  return {provider,providerId};
+}
+async function attemptQueuedEmail(env,row,cfg=null){
+  cfg=cfg||await emailConfig(env);if(!cfg?.fromEmail)throw new Error('Email provider is not configured.');
+  try{const r=await deliverEmail(env,cfg,{to:row.recipient,subject:row.subject,html:row.html,text:row.text_body});const t=now();await env.DB.batch([env.DB.prepare(`UPDATE email_queue SET status='sent',provider=?,provider_message_id=?,last_error=NULL,updated_at=?,sent_at=? WHERE id=?`).bind(r.provider,r.providerId||null,t,t,row.id),env.DB.prepare('INSERT INTO email_log(id,recipient,template,subject,status,provider,provider_message_id,error,created_at,sent_at) VALUES(?,?,?,?,?,?,?,?,?,?)').bind(id(),row.recipient,row.template,row.subject,'sent',r.provider,r.providerId||null,null,row.created_at,t)]);return {ok:true,id:r.providerId};}
+  catch(err){const attempts=Number(row.attempts||0)+1,mins=Math.min(60,Math.pow(2,Math.min(attempts,5))),next=new Date(Date.now()+mins*60000).toISOString(),status=attempts>=5?'dead':'retry';await env.DB.batch([env.DB.prepare('UPDATE email_queue SET status=?,attempts=?,next_attempt_at=?,last_error=?,updated_at=? WHERE id=?').bind(status,attempts,next,cleanText(err?.message||err,800),now(),row.id),env.DB.prepare('INSERT INTO email_log(id,recipient,template,subject,status,provider,provider_message_id,error,created_at,sent_at) VALUES(?,?,?,?,?,?,?,?,?,?)').bind(id(),row.recipient,row.template,row.subject,'failed',cfg?.service||'unknown',null,cleanText(err?.message||err,800),row.created_at,null)]);console.error('OneArtist email error',err);return {ok:false,error:String(err?.message||err),queued:status!=='dead'};}
+}
+async function processEmailQueue(env,limit=3){const q=await env.DB.prepare(`SELECT * FROM email_queue WHERE status IN ('pending','retry') AND next_attempt_at<=? ORDER BY created_at ASC LIMIT ${Math.max(1,Math.min(10,Number(limit)||3))}`).bind(now()).all();for(const row of q.results||[])await attemptQueuedEmail(env,row);return (q.results||[]).length;}
 async function sendEmail(env,{to,subject,html,text='',template='generic'}){
   const cfg=await emailConfig(env); if(!cfg?.fromEmail) return {ok:false,skipped:true,error:'Email provider is not configured.'};
-  const logId=id(), created=now(), provider=cfg.service||'resend';
-  try{
-    let providerId='';
-    if(provider==='resend'){
-      if(!cfg.apiKey)throw new Error('Resend API key is missing.');const from=cfg.fromName?`${cleanText(cfg.fromName,120)} <${cleanText(cfg.fromEmail,220)}>`:cleanText(cfg.fromEmail,220);const payload={from,to:[cleanText(to,220)],subject:cleanText(subject,300),html:String(html||''),text:cleanText(text,10000)};if(cfg.replyTo)payload.reply_to=cleanText(cfg.replyTo,220);const r=await fetch('https://api.resend.com/emails',{method:'POST',headers:{authorization:`Bearer ${cfg.apiKey}`,'content-type':'application/json'},body:JSON.stringify(payload)});let j={};try{j=await r.json()}catch{}if(!r.ok)throw new Error(cleanText(j.message||j.error||`Resend returned ${r.status}`,500));providerId=cleanText(j.id||'',160);
-    }else if(provider==='cloudflare'){
-      if(!cfg.accountId||!cfg.apiToken)throw new Error('Cloudflare Email account ID or API token is missing.');const payload={to:cleanText(to,220),from:cfg.fromName?{address:cleanText(cfg.fromEmail,220),name:cleanText(cfg.fromName,120)}:cleanText(cfg.fromEmail,220),subject:cleanText(subject,300),html:String(html||''),text:cleanText(text,10000)};if(cfg.replyTo)payload.replyTo=cleanText(cfg.replyTo,220);const r=await fetch(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(cfg.accountId)}/email/sending/send`,{method:'POST',headers:{authorization:`Bearer ${cfg.apiToken}`,'content-type':'application/json'},body:JSON.stringify(payload)});let j={};try{j=await r.json()}catch{}if(!r.ok||j.success===false)throw new Error(cleanText(j.errors?.[0]?.message||`Cloudflare Email returned ${r.status}`,500));providerId=cleanText(j.result?.message_id||j.result?.delivered?.[0]||j.result?.queued?.[0]||'',160);
-    }else throw new Error('Unsupported email service.');
-    await env.DB.prepare('INSERT INTO email_log(id,recipient,template,subject,status,provider,provider_message_id,error,created_at,sent_at) VALUES(?,?,?,?,?,?,?,?,?,?)').bind(logId,cleanText(to,220),template,cleanText(subject,300),'sent',provider,providerId||null,null,created,now()).run();return {ok:true,id:providerId};
-  }catch(err){await env.DB.prepare('INSERT INTO email_log(id,recipient,template,subject,status,provider,provider_message_id,error,created_at,sent_at) VALUES(?,?,?,?,?,?,?,?,?,?)').bind(logId,cleanText(to,220),template,cleanText(subject,300),'failed',provider,null,cleanText(err?.message||err,800),created,null).run();console.error('OneArtist email error',err);return {ok:false,error:String(err?.message||err)};}
+  const qid=id(),t=now();await env.DB.prepare('INSERT INTO email_queue(id,recipient,template,subject,html,text_body,status,attempts,next_attempt_at,last_error,provider,provider_message_id,created_at,updated_at,sent_at) VALUES(?,?,?,?,?,?,\'pending\',0,?,NULL,?,NULL,?,?,NULL)').bind(qid,cleanText(to,220),template,cleanText(subject,300),String(html||''),cleanText(text,10000),t,cfg.service||'resend',t,t).run();
+  const row=await env.DB.prepare('SELECT * FROM email_queue WHERE id=?').bind(qid).first();return attemptQueuedEmail(env,row,cfg);
 }
 async function emailShell(env,title,content){ const settings=await getSettings(env), artist=htmlEscape(settings.artist?.name||settings.site?.title||'OneArtist Hub'), accent=htmlEscape(settings.site?.accent||'#b45cff'); return `<!doctype html><html><body style="margin:0;background:#070812;color:#eef1ff;font-family:Arial,sans-serif"><div style="max-width:640px;margin:0 auto;padding:30px 18px"><div style="padding:26px;border:1px solid #282b45;border-radius:18px;background:#0d0f1d"><div style="font-size:13px;letter-spacing:.14em;color:${accent};text-transform:uppercase">${artist}</div><h1 style="margin:8px 0 18px;font-size:28px">${htmlEscape(title)}</h1>${content}<div style="margin-top:26px;padding-top:18px;border-top:1px solid #282b45;color:#8f96b3;font-size:12px">Powered by OneArtist Hub</div></div></div></body></html>`; }
 async function adminEmail(env){ const a=await env.DB.prepare('SELECT email FROM admins ORDER BY id LIMIT 1').first(); return a?.email||''; }
@@ -279,8 +389,8 @@ export async function route(req,env,url,ctx){
   if(!env.DB) return json({ok:false,error:'D1 binding DB is missing. Add a D1 binding named DB in Cloudflare.'},503);
   const p=url.pathname.replace(/^\/api\/?/,'').replace(/\/$/,'');
   const method=req.method.toUpperCase();
-  const installed=await isInstalled(env); if(installed){await ensureUpgrade012(env);await ensureUpgrade013(env);await ensureUpgrade020(env);}
-  if(p==='status' && method==='GET') return json({ok:true,installed,version:'0.2.0'});
+  const installed=await isInstalled(env); if(installed){await ensureUpgrade012(env);await ensureUpgrade013(env);await ensureUpgrade020(env);await ensureUpgrade022(env);if(ctx?.waitUntil)ctx.waitUntil(processEmailQueue(env,3));}
+  if(p==='status' && method==='GET') return json({ok:true,installed,version:'0.2.2'});
   if(p==='setup' && method==='POST'){
     if(await isInstalled(env)) return json({ok:false,error:'OneArtist Hub is already installed.'},409);
     const b=await body(req); if(!env.ONEARTIST_SETUP_KEY || b.setupKey!==env.ONEARTIST_SETUP_KEY) return json({ok:false,error:'Invalid setup key.'},403);
@@ -360,7 +470,11 @@ export async function route(req,env,url,ctx){
   }
   const publicMedia=p.match(/^media\/file\/([^/]+)$/);
   if(publicMedia&&method==='GET'){
-    const row=await env.DB.prepare('SELECT * FROM media_objects WHERE id=?').bind(publicMedia[1]).first();if(!row||row.visibility!=='public')return new Response('Media not found.',{status:404});const obj=await getStoredObject(env,row);if(!obj)return new Response('Media storage unavailable.',{status:503});return new Response(obj.body,{headers:{'content-type':obj.contentType,'cache-control':'public, max-age=3600','content-disposition':`inline; filename="${safeFileName(row.filename)}"`}});
+    const row=await env.DB.prepare('SELECT * FROM media_objects WHERE id=?').bind(publicMedia[1]).first();
+    if(!row||row.visibility!=='public')return new Response('Media not found.',{status:404});
+    const obj=await getStoredObject(env,row);if(!obj)return new Response('Media storage unavailable.',{status:503});
+    const contentType=normalizeMediaContentType(obj.contentType||row.content_type||'application/octet-stream',row.filename),kind=mediaTypeFor(contentType,row.filename),disposition=['image','audio','video'].includes(kind)?'inline':'attachment';
+    return new Response(obj.body,{headers:{'content-type':contentType,'cache-control':'public, max-age=3600','content-disposition':`${disposition}; filename="${safeFileName(row.filename)}"`,'x-content-type-options':'nosniff','cross-origin-resource-policy':'same-site'}});
   }
   if(p==='analytics' && method==='POST'){
     const b=await body(req), event=String(b.event||''); if(!['site_view','play','video_view'].includes(event))return json({ok:false,error:'Invalid event'},400);
@@ -472,16 +586,51 @@ export async function route(req,env,url,ctx){
   if(p==='admin/notifications'&&method==='GET'){ const {results=[]}=await env.DB.prepare('SELECT * FROM notifications ORDER BY created_at DESC LIMIT 40').all(); const unread=results.filter(x=>!x.is_read).length; return json({ok:true,notifications:results.map(x=>({...x,is_read:!!x.is_read})),unread}); }
   if(p==='admin/notifications/read-all'&&method==='POST'){ if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403); await env.DB.prepare('UPDATE notifications SET is_read=1 WHERE is_read=0').run(); return json({ok:true}); }
   const noteMatch=p.match(/^admin\/notifications\/([^/]+)$/); if(noteMatch&&method==='PUT'){ if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403); await env.DB.prepare('UPDATE notifications SET is_read=1 WHERE id=?').bind(noteMatch[1]).run(); return json({ok:true}); }
-  if(p==='admin/storage/status'&&method==='GET'){const st=await storageSettings(env),db=await dropboxConfig(env);return json({ok:true,provider:st.provider||(env.MEDIA?'r2':env.LOCAL_STORAGE?'local':'dropbox'),r2Bound:!!env.MEDIA,localAvailable:!!env.LOCAL_STORAGE,dropboxConfigured:!!db?.accessToken});}
-  if(p==='admin/storage/config'&&method==='PUT'){if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403);const b=await body(req),provider=['r2','dropbox','local'].includes(b.provider)?b.provider:'dropbox';if(provider==='r2'&&!env.MEDIA)return json({ok:false,error:'Add an R2 bucket binding named MEDIA before selecting R2.'},400);if(provider==='dropbox'&&!await dropboxConfig(env))return json({ok:false,error:'Configure Dropbox before selecting Dropbox storage.'},400);if(provider==='local'&&!env.LOCAL_STORAGE)return json({ok:false,error:'Local storage is available only in the self-hosted/VPS profile.'},400);await setSetting(env,'storage',{provider});return json({ok:true,provider});}
-  if(p==='admin/media/upload'&&method==='POST'){if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403);const name=safeFileName(req.headers.get('x-file-name')||'upload.bin'),contentType=cleanText(req.headers.get('x-content-type')||req.headers.get('content-type')||'application/octet-stream',160),visibility=req.headers.get('x-visibility')==='public'?'public':'private',folder=cleanSlug(req.headers.get('x-folder')||'media'),ab=await req.arrayBuffer(),limit=Math.max(1024*1024,Number(env.MAX_UPLOAD_BYTES)||95*1024*1024);if(!ab.byteLength)return json({ok:false,error:'Upload is empty.'},400);if(ab.byteLength>limit)return json({ok:false,error:`Upload exceeds this installation profile limit (${Math.round(limit/1024/1024)} MB). Use smaller MP3 packages, R2 multipart in a future release, or the VPS profile for larger masters.`},413);const out=await putStoredObject(env,{bytes:ab,filename:name,contentType,visibility,folder});return json({ok:true,object:out});}
+  if(p==='admin/storage/status'&&method==='GET'){const st=await storageSettings(env),db=await dropboxConfig(env),s3=await s3Config(env);return json({ok:true,provider:st.provider||(env.MEDIA?'r2':env.LOCAL_STORAGE?'local':s3?.accessKeyId?'s3':'dropbox'),r2Bound:!!env.MEDIA,localAvailable:!!env.LOCAL_STORAGE,dropboxConfigured:!!db?.accessToken,s3Configured:!!(s3?.accessKeyId&&s3?.secretAccessKey&&s3?.bucket&&s3?.endpoint),s3Endpoint:s3?.endpoint||'',s3Region:s3?.region||'us-east-1',s3Bucket:s3?.bucket||'',s3AccessKeyId:s3?.accessKeyId||'',s3ForcePathStyle:s3?.forcePathStyle!==false});}
+  if(p==='admin/storage/config'&&method==='PUT'){if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403);const b=await body(req),provider=['r2','dropbox','s3','local'].includes(b.provider)?b.provider:'dropbox';if(provider==='r2'&&!env.MEDIA)return json({ok:false,error:'Add an R2 bucket binding named MEDIA before selecting R2.'},400);if(provider==='dropbox'&&!await dropboxConfig(env))return json({ok:false,error:'Configure Dropbox before selecting Dropbox storage.'},400);if(provider==='s3'&&!await s3Config(env))return json({ok:false,error:'Configure S3-compatible storage before selecting it.'},400);if(provider==='local'&&!env.LOCAL_STORAGE)return json({ok:false,error:'Local storage is available only in the self-hosted/VPS profile.'},400);await setSetting(env,'storage',{provider});return json({ok:true,provider});}
+  if(p==='admin/media/library'&&method==='GET'){
+    const kind=['image','audio','video','document'].includes(url.searchParams.get('kind'))?url.searchParams.get('kind'):'';
+    const visibility=['public','private'].includes(url.searchParams.get('visibility'))?url.searchParams.get('visibility'):'';
+    return json({ok:true,items:await mediaLibraryItems(env,{kind,visibility})});
+  }
+  const mediaLibraryItem=p.match(/^admin\/media\/library\/([^/]+)$/);
+  if(mediaLibraryItem&&method==='PUT'){
+    if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403);
+    const row=await env.DB.prepare('SELECT * FROM media_objects WHERE id=?').bind(mediaLibraryItem[1]).first();if(!row)return json({ok:false,error:'Media file not found.'},404);
+    const b=await body(req);await upsertMediaMeta(env,row,{title:cleanText(b.title,250),alt:cleanText(b.alt,1000)});
+    const item=(await mediaLibraryItems(env,{})).find(x=>x.id===row.id);return json({ok:true,item});
+  }
+  if(mediaLibraryItem&&method==='DELETE'){
+    if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403);
+    const row=await env.DB.prepare('SELECT * FROM media_objects WHERE id=?').bind(mediaLibraryItem[1]).first();if(!row)return json({ok:false,error:'Media file not found.'},404);
+    const item=(await mediaLibraryItems(env,{})).find(x=>x.id===row.id);if(Number(item?.usageCount||0)>0)return json({ok:false,error:`This media file is currently used in ${item.usageCount} place${item.usageCount===1?'':'s'}. Replace those references before deleting it.`},409);
+    await deleteStoredObject(env,row);
+    const metas=await mediaMetaRows(env),meta=metas.find(x=>x.data?.mediaObjectId===row.id);const statements=[env.DB.prepare('DELETE FROM media_objects WHERE id=?').bind(row.id)];if(meta)statements.push(env.DB.prepare('DELETE FROM content_items WHERE id=?').bind(meta.id));await env.DB.batch(statements);
+    return json({ok:true});
+  }
+  if(p==='admin/media/upload'&&method==='POST'){
+    if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403);
+    const name=safeFileName(req.headers.get('x-file-name')||'upload.bin'),contentType=normalizeMediaContentType(req.headers.get('x-content-type')||req.headers.get('content-type')||'application/octet-stream',name),visibility=req.headers.get('x-visibility')==='public'?'public':'private',folder=cleanSlug(req.headers.get('x-folder')||'media'),registerLibrary=req.headers.get('x-register-library')==='1',ab=await req.arrayBuffer(),limit=Math.max(1024*1024,Number(env.MAX_UPLOAD_BYTES)||95*1024*1024);
+    if(!ab.byteLength)return json({ok:false,error:'Upload is empty.'},400);
+    if(ab.byteLength>limit)return json({ok:false,error:`Upload exceeds this installation profile limit (${Math.round(limit/1024/1024)} MB). Use smaller MP3 packages, R2 multipart in a future release, or the VPS profile for larger masters.`},413);
+    if(visibility==='public'&&!publicMediaAllowed(contentType,name))return json({ok:false,error:'That file type cannot be served as public media. Use JPG, PNG, WebP, GIF, audio, video, PDF or TXT; protected release ZIPs remain private.'},415);
+    const out=await putStoredObject(env,{bytes:ab,filename:name,contentType,visibility,folder});
+    if(registerLibrary){const storedRow=await env.DB.prepare('SELECT * FROM media_objects WHERE id=?').bind(out.id).first();if(storedRow)await upsertMediaMeta(env,storedRow,{title:name.replace(/\.[^.]+$/,''),alt:''});}
+    return json({ok:true,object:{...out,contentType,visibility,mediaType:mediaTypeFor(contentType,name)}});
+  }
+  if(p==='admin/storage/s3/test'&&method==='POST'){if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403);const cfg=await s3Config(env);if(!cfg)return json({ok:false,error:'Save S3-compatible credentials first.'},400);const key=`oneartist/system/connection-${id()}.txt`,bytes=utf8('OneArtist Hub S3 connection test');const put=await s3Request(env,'PUT',key,bytes,'text/plain');if(!put.ok)return json({ok:false,error:`S3 write failed (${put.status}).`},502);const get=await s3Request(env,'GET',key);if(!get.ok)return json({ok:false,error:`S3 read failed (${get.status}).`},502);await s3Request(env,'DELETE',key);return json({ok:true,bucket:cfg.bucket,endpoint:cfg.endpoint});}
+  if(p==='admin/email/queue'&&method==='GET'){const q=await env.DB.prepare('SELECT id,recipient,template,subject,status,attempts,next_attempt_at,last_error,provider,provider_message_id,created_at,updated_at,sent_at FROM email_queue ORDER BY created_at DESC LIMIT 100').all();return json({ok:true,queue:q.results||[]});}
+  if(p==='admin/email/queue/retry'&&method==='POST'){if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403);await env.DB.prepare(`UPDATE email_queue SET status='retry',next_attempt_at=?,updated_at=? WHERE status IN ('retry','dead')`).bind(now(),now()).run();const processed=await processEmailQueue(env,10);return json({ok:true,processed});}
+  if(p==='admin/paypal/connect/start'&&method==='POST'){if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403);if(!env.ONEARTIST_CONNECT_URL||!env.ONEARTIST_CONNECT_TOKEN)return json({ok:false,error:'PayPal Connect is not enabled on this installation. Configure ONEARTIST_CONNECT_URL and ONEARTIST_CONNECT_TOKEN as server secrets.'},503);const tracking=`oah-${id()}`,callback=`${url.origin}/api/paypal/connect/callback`;const r=await fetch(String(env.ONEARTIST_CONNECT_URL).replace(/\/+$/,'')+'/onboard/start',{method:'POST',headers:{authorization:`Bearer ${env.ONEARTIST_CONNECT_TOKEN}`,'content-type':'application/json'},body:JSON.stringify({trackingId:tracking,returnUrl:callback})});let j={};try{j=await r.json()}catch{}if(!r.ok||!j.actionUrl)return json({ok:false,error:cleanText(j.error||`Connect service returned ${r.status}`,500)},502);await setSetting(env,'paypalConnect',{trackingId:tracking,status:'pending'});return json({ok:true,actionUrl:j.actionUrl});}
+  if(p==='paypal/connect/callback'&&method==='GET'){const merchantId=cleanText(url.searchParams.get('merchantIdInPayPal')||'',40),granted=url.searchParams.get('permissionsGranted')==='true',tracking=cleanText(url.searchParams.get('merchantId')||'',100),state=(await getSettings(env)).paypalConnect||{};if(!merchantId||!granted||!tracking||tracking!==state.trackingId)return new Response('PayPal onboarding could not be verified.',{status:400,headers:{'content-type':'text/plain'}});if(!env.ONEARTIST_CONNECT_URL||!env.ONEARTIST_CONNECT_TOKEN)return new Response('PayPal Connect verification service is unavailable.',{status:503,headers:{'content-type':'text/plain'}});const vr=await fetch(String(env.ONEARTIST_CONNECT_URL).replace(/\/+$/,'')+'/onboard/status',{method:'POST',headers:{authorization:`Bearer ${env.ONEARTIST_CONNECT_TOKEN}`,'content-type':'application/json'},body:JSON.stringify({trackingId:tracking,merchantId})});let vj={};try{vj=await vr.json()}catch{}if(!vr.ok||vj.trackingId!==tracking||vj.merchantId!==merchantId)return new Response('PayPal merchant verification failed.',{status:400,headers:{'content-type':'text/plain'}});await setSetting(env,'paypalConnect',{trackingId:tracking,merchantId,status:vj.paymentsReceivable?'connected':'action_required',paymentsReceivable:!!vj.paymentsReceivable,connectedAt:now(),accountStatus:cleanText(url.searchParams.get('accountStatus')||'',80),emailConfirmed:!!vj.primaryEmailConfirmed,products:vj.products||[]});return Response.redirect(url.origin+'/admin?section=settings&paypal=connected',302);}
+  if(p==='admin/paypal/connect/status'&&method==='GET'){const st=(await getSettings(env)).paypalConnect||{};return json({ok:true,available:!!(env.ONEARTIST_CONNECT_URL&&env.ONEARTIST_CONNECT_TOKEN),status:st.status||'not_connected',merchantId:st.merchantId||'',emailConfirmed:!!st.emailConfirmed});}
   if(p==='admin/paypal/test'&&method==='POST'){if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403);const cfg=await paypalConfig(env);if(!cfg?.clientId||!cfg?.clientSecret)return json({ok:false,error:'Save PayPal credentials first.'},400);const pp=await paypalAccess(cfg);return json({ok:true,environment:cfg.environment||'sandbox',authenticated:!!pp.token});}
   if(p==='admin/notification-preferences'&&method==='GET'){ return json({ok:true,preferences:await notificationPrefs(env)}); }
   if(p==='admin/notification-preferences'&&method==='PUT'){ if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403); const b=await body(req), f=x=>b[x]===false||b[x]===0?0:1, threshold=Math.max(1,Math.min(100,Math.floor(Number(b.low_inventory_threshold)||5))); await env.DB.prepare(`UPDATE notification_preferences SET new_order=?,digital_sale=?,physical_sale=?,shipping_updates=?,security_alerts=?,low_inventory=?,low_inventory_threshold=?,updated_at=? WHERE id=1`).bind(f('new_order'),f('digital_sale'),f('physical_sale'),f('shipping_updates'),f('security_alerts'),f('low_inventory'),threshold,now()).run(); return json({ok:true,preferences:await notificationPrefs(env)}); }
-  if(p==='admin/email/config'&&method==='GET'){ const cfg=await emailConfig(env); const configured=cfg?.service==='cloudflare'?!!(cfg?.apiToken&&cfg?.accountId&&cfg?.fromEmail):!!(cfg?.apiKey&&cfg?.fromEmail); return json({ok:true,configured,service:cfg?.service||'resend',fromName:cfg?.fromName||'',fromEmail:cfg?.fromEmail||'',replyTo:cfg?.replyTo||'',accountId:cfg?.accountId||''}); }
+  if(p==='admin/email/config'&&method==='GET'){ const cfg=await emailConfig(env); const configured=cfg?.service==='cloudflare'?!!(cfg?.apiToken&&cfg?.accountId&&cfg?.fromEmail):cfg?.service==='smtp'?!!(cfg?.smtpHost&&cfg?.smtpUser&&cfg?.smtpPassword&&cfg?.fromEmail):!!(cfg?.apiKey&&cfg?.fromEmail); return json({ok:true,configured,service:cfg?.service||'resend',fromName:cfg?.fromName||'',fromEmail:cfg?.fromEmail||'',replyTo:cfg?.replyTo||'',accountId:cfg?.accountId||'',smtpAvailable:!!env.SMTP_SEND,smtpHost:cfg?.smtpHost||'',smtpPort:Number(cfg?.smtpPort||587),smtpSecure:!!cfg?.smtpSecure,smtpUser:cfg?.smtpUser||''}); }
   if(p==='admin/email/test'&&method==='POST'){ if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403); const b=await body(req), to=cleanText(b.to||user.email,220); const html=await emailShell(env,'Email test','<p style="color:#cdd1e4">Your OneArtist Hub email integration is working.</p>'); const result=await sendEmail(env,{to,subject:'OneArtist Hub email test',html,text:'Your OneArtist Hub email integration is working.',template:'test'}); if(!result.ok)return json({ok:false,error:result.error||'Test email failed.'},502); return json({ok:true}); }
   if(p==='admin/paypal/config'&&method==='GET'){ const cfg=await paypalConfig(env); return json({ok:true,configured:!!(cfg?.clientId&&cfg?.clientSecret),clientId:cfg?.clientId||'',environment:cfg?.environment||'sandbox',webhookId:cfg?.webhookId||'',webhookConfigured:!!cfg?.webhookId}); }
-  if(p==='admin/integrations'&&method==='POST'){ if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403); const b=await body(req), provider=cleanText(b.provider,40); if(!['paypal','dropbox','email'].includes(provider))return json({ok:false,error:'Unsupported provider.'},400); let data={}; if(provider==='paypal'){let previous=null;try{previous=await paypalConfig(env)}catch{} data={clientId:cleanText(b.clientId||previous?.clientId||'',300),clientSecret:String(b.clientSecret||previous?.clientSecret||''),environment:b.environment==='live'?'live':'sandbox',webhookId:cleanText(b.webhookId??previous?.webhookId??'',80)};} else if(provider==='dropbox'){let previous=null;try{const r=await env.DB.prepare(`SELECT data_enc FROM integrations WHERE provider='dropbox'`).first();if(r)previous=await decrypt(env,r.data_enc)}catch{} data={accessToken:String(b.accessToken||previous?.accessToken||'')};} else { let previous=null; try{previous=await emailConfig(env)}catch{} const service=b.service==='cloudflare'?'cloudflare':'resend'; data={service,apiKey:String(b.apiKey||previous?.apiKey||''),apiToken:String(b.apiToken||previous?.apiToken||''),accountId:cleanText(b.accountId||previous?.accountId||'',80),fromName:cleanText(b.fromName||previous?.fromName||'',120),fromEmail:cleanText(b.fromEmail||previous?.fromEmail||'',220).trim(),replyTo:cleanText(b.replyTo||previous?.replyTo||'',220).trim()}; } const emailMissing=provider==='email'&&(!data.fromEmail||((data.service==='cloudflare')?(!data.apiToken||!data.accountId):!data.apiKey)); if((provider==='paypal'&&(!data.clientId||!data.clientSecret))||(provider==='dropbox'&&!data.accessToken)||emailMissing)return json({ok:false,error:'Required secret or sender information is missing.'},400); const e=await encrypt(env,data); await env.DB.prepare(`INSERT INTO integrations(provider,data_enc,updated_at) VALUES(?,?,?) ON CONFLICT(provider) DO UPDATE SET data_enc=excluded.data_enc,updated_at=excluded.updated_at`).bind(provider,e,now()).run(); return json({ok:true}); }
+  if(p==='admin/integrations'&&method==='POST'){ if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403); const b=await body(req), provider=cleanText(b.provider,40); if(!['paypal','dropbox','s3','email'].includes(provider))return json({ok:false,error:'Unsupported provider.'},400); let data={}; if(provider==='paypal'){let previous=null;try{previous=await paypalConfig(env)}catch{} data={clientId:cleanText(b.clientId||previous?.clientId||'',300),clientSecret:String(b.clientSecret||previous?.clientSecret||''),environment:b.environment==='live'?'live':'sandbox',webhookId:cleanText(b.webhookId??previous?.webhookId??'',80)};} else if(provider==='dropbox'){let previous=null;try{const r=await env.DB.prepare(`SELECT data_enc FROM integrations WHERE provider='dropbox'`).first();if(r)previous=await decrypt(env,r.data_enc)}catch{} data={accessToken:String(b.accessToken||previous?.accessToken||'')};} else if(provider==='s3'){let previous=null;try{previous=await s3Config(env)}catch{} data={endpoint:cleanText(b.endpoint||previous?.endpoint||'',600).replace(/\/+$/,''),region:cleanText(b.region||previous?.region||'us-east-1',64),bucket:cleanText(b.bucket||previous?.bucket||'',128),accessKeyId:cleanText(b.accessKeyId||previous?.accessKeyId||'',256),secretAccessKey:String(b.secretAccessKey||previous?.secretAccessKey||''),forcePathStyle:b.forcePathStyle!==false};} else { let previous=null; try{previous=await emailConfig(env)}catch{} const service=['resend','brevo','cloudflare','smtp'].includes(b.service)?b.service:'resend'; data={service,apiKey:String(b.apiKey||previous?.apiKey||''),apiToken:String(b.apiToken||previous?.apiToken||''),accountId:cleanText(b.accountId||previous?.accountId||'',80),smtpHost:cleanText(b.smtpHost||previous?.smtpHost||'',220),smtpPort:Number(b.smtpPort||previous?.smtpPort||587),smtpSecure:!!b.smtpSecure,smtpUser:cleanText(b.smtpUser||previous?.smtpUser||'',220),smtpPassword:String(b.smtpPassword||previous?.smtpPassword||''),fromName:cleanText(b.fromName||previous?.fromName||'',120),fromEmail:cleanText(b.fromEmail||previous?.fromEmail||'',220).trim(),replyTo:cleanText(b.replyTo||previous?.replyTo||'',220).trim()}; } const emailMissing=provider==='email'&&(!data.fromEmail||(data.service==='cloudflare'?(!data.apiToken||!data.accountId):data.service==='smtp'?(!env.SMTP_SEND||!data.smtpHost||!data.smtpUser||!data.smtpPassword):!data.apiKey)); if((provider==='paypal'&&(!data.clientId||!data.clientSecret))||(provider==='dropbox'&&!data.accessToken)||(provider==='s3'&&(!data.endpoint||!data.bucket||!data.accessKeyId||!data.secretAccessKey))||emailMissing)return json({ok:false,error:'Required secret or sender information is missing.'},400); const e=await encrypt(env,data); await env.DB.prepare(`INSERT INTO integrations(provider,data_enc,updated_at) VALUES(?,?,?) ON CONFLICT(provider) DO UPDATE SET data_enc=excluded.data_enc,updated_at=excluded.updated_at`).bind(provider,e,now()).run(); return json({ok:true}); }
   if(p==='admin/integrations'&&method==='GET'){ const {results=[]}=await env.DB.prepare('SELECT provider,updated_at FROM integrations').all(); return json({ok:true,integrations:results}); }
   if(p==='admin/youtube'&&method==='POST'){ if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403); const b=await body(req), youtubeId=youtubeIdFromUrl(b.url); if(!youtubeId)return json({ok:false,error:'Enter a valid YouTube video URL.'},400); const canonical=`https://www.youtube.com/watch?v=${youtubeId}`; let meta={}; try{const r=await fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(canonical)}&format=json`,{headers:{accept:'application/json'}}); if(r.ok)meta=await r.json()}catch{} return json({ok:true,youtubeId,title:cleanText(meta.title||'',250),author:cleanText(meta.author_name||'',250),thumbnail:cleanText(meta.thumbnail_url||`https://img.youtube.com/vi/${youtubeId}/hqdefault.jpg`,1000)}); }
   if(p==='admin/orders'&&method==='GET'){ const {results=[]}=await env.DB.prepare('SELECT id,public_id,customer_email,customer_name,currency,total,status,fulfillment_status,tracking_carrier,tracking_number,shipping_json,created_at FROM orders ORDER BY created_at DESC LIMIT 100').all(); return json({ok:true,orders:results.map(o=>({...o,shipping:(()=>{try{return JSON.parse(o.shipping_json||'{}')}catch{return {}}})()}))}); }

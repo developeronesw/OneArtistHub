@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.2.2 — Infrastructure & Integrations
+- Added S3-compatible media storage with AWS Signature V4 and connection testing.
+- Added Brevo and self-hosted SMTP transactional email adapters.
+- Added durable transactional email queue with retry/dead-letter handling.
+- Added Node/VPS SQLite database profile and Ubuntu SQLite installer.
+- Added PayPal Connect partner-onboarding architecture and a separate central Worker reference service.
+- Includes 0.2.1 Media Library and Universal Asset Picker for cumulative 0.2.0 upgrades.
+
+## 0.2.1 — Media Library & Universal Asset Picker
+
+- Replaced URL-only media administration with a real provider-backed Media Library.
+- Added reusable Media Library image picker to release, track, product, artist profile, artist logo, homepage hero and Album ZIP workflows.
+- Added direct image upload from artwork/image fields while preserving manual URL entry.
+- Added responsive media search/filter grid, image previews, file/provider/folder details and public URL copy action.
+- Added reusable media title and alt-text metadata editing.
+- Added reference-aware deletion protection so in-use media cannot be removed accidentally.
+- Added provider-aware deletion for Cloudflare R2, Dropbox and VPS-local storage.
+- Added safer public media delivery headers and attachment behavior for document media.
+- Preserved the 0.2.0 Album ZIP ingest, storage adapters, MySQL/VPS profile, PayPal commerce and email-provider integrations without a database migration.
+
 ## 0.2.0 — Media & Deployment
 
 - Added OneArtist Album Ingest for Album/EP/Single MP3 ZIPs.

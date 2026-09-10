@@ -1,12 +1,19 @@
-# OneArtist Hub 0.2.0 — Media & Deployment
+# OneArtist Hub 0.2.2 — Media Library & Universal Asset Picker
 
 **Official admin design:** Aurora Glass Studio  
 **Public themes:** Midnight Cinema, Artist OS, Neon Editorial
 
-OneArtist Hub is a responsive artist CMS, storefront, continuous music player and portable JavaScript backend. **Cloudflare Pages + Pages Functions + D1** remains the recommended serverless profile, while 0.2.0 adds a **Node.js + MySQL/MariaDB + NGINX** self-hosted/VPS profile. PHP is not required.
+OneArtist Hub is a responsive artist CMS, storefront, continuous music player and portable JavaScript backend. **Cloudflare Pages + Pages Functions + D1** remains the recommended serverless profile, while the same application also supports a **Node.js + MySQL/MariaDB + NGINX** self-hosted/VPS profile. PHP is not required. Version 0.2.2 adds a real provider-backed Media Library and reusable asset picker across the artist site.
 
 ## What is functional in this build
 
+- Provider-backed Media Library for uploaded artwork, artist/hero images, audio, video and documents
+- Universal image asset picker available from release covers, track artwork, product images, artist profile image, artist logo, homepage hero and Album ZIP ingest
+- Direct image upload from the same forms without leaving the editor, while preserving manual URL entry
+- Searchable responsive media grid with image previews, provider/folder/file-size details and copyable public URLs
+- Media title and alt-text editing for reusable accessibility/organization metadata
+- In-use reference detection blocks destructive deletion of media still referenced by site content/settings
+- Provider-aware media deletion for Cloudflare R2, Dropbox and VPS-local storage
 - OneArtist Album Ingest: upload an Album/EP/Single ZIP containing MP3 tracks and optional artwork
 - Automatic ID3v2 metadata reading, embedded/external artwork detection, editable track titles and drag/touch track ordering
 - Finalize pipeline removes old ID3v2/ID3v1 tags, rewrites MP3 title/artist/album/track-total/year/genre tags, embeds cover artwork and records full track durations
@@ -40,7 +47,7 @@ OneArtist Hub is a responsive artist CMS, storefront, continuous music player an
 - Administrator password change, administrator email change and old-session invalidation
 - Real D1-backed counters for verified audio plays, page/site views and protected downloads
 - D1-backed revenue/order/release dashboard metrics plus real 30-day verified engagement series
-- CRUD for releases, tracks, YouTube videos, tour dates, products, custom pages and media URLs
+- CRUD for releases, tracks, YouTube videos, tour dates, products and custom pages, plus a real provider-backed Media Library
 - Three switchable public themes
 - OneMusicPlayer-inspired floating glass SaaS continuous player with responsive mobile full-player, queue, shuffle, repeat, favorites and volume
 - Play counting after 10 seconds of real preview playback
@@ -106,7 +113,7 @@ Leave **Load demo content** checked during first setup. The installer creates de
 
 ## Architecture notes
 
-Cloudflare/D1 is the implemented backend adapter in the current release. The API boundary intentionally keeps the public/admin React UI independent from D1 so additional MySQL/PostgreSQL/SQLite/self-hosted adapters can be added without rebuilding the themes.
+Cloudflare/D1 is the recommended serverless backend. The self-hosted profile uses the same API contract through the included MySQL/MariaDB compatibility adapter and private local-storage provider. The React UI remains independent of the selected database/storage profile, so additional adapters can be introduced without rebuilding the public themes.
 
 PayPal and Dropbox require your own provider credentials before those external flows can be end-to-end tested. The rest of the CMS can be tested using the included demo data immediately after D1 installation.
 
@@ -124,8 +131,14 @@ Cloudflare Pages installs the package dependencies automatically during its Git 
 
 ## Email notifications
 
-OneArtist Hub 0.1.2 supports Resend through the server-side REST API. Configure it under **Settings → Email & Sales Notifications** using a sending API key and a verified sender address. Forgot-password recovery depends on a working email integration.
+OneArtist Hub supports **Resend** and **Cloudflare Email Service** from **Settings → Email & Sales Notifications**. Provider credentials are encrypted at rest. Resend remains suitable for the normal serverless setup; Cloudflare Email Service can be selected when the deployment/account has the required sending capability. Forgot-password recovery and customer magic-link sign-in depend on a working email integration.
 
 ## Version
 
-0.1.3 Commerce & Customer Accounts — September 9, 2026
+0.2.2 Media Library & Universal Asset Picker — September 10, 2026
+
+
+## 0.2.2 provider support
+OneArtist Hub supports D1/MySQL/MariaDB/SQLite databases; R2/Dropbox/S3-compatible/VPS-local storage; Resend/Brevo/Cloudflare Email/SMTP mail; and PayPal Direct plus optional partner-onboarding architecture. See `docs/INTEGRATIONS-0.2.2.md`.
+
+Release QA notes: `docs/RELEASE-QA-0.2.2.md`.

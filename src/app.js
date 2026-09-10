@@ -77,18 +77,98 @@ async function api(path,opts={}){
   if(!res.ok)throw new Error(data.error||data.message||`Request failed (${res.status})`);return data;
 }
 
-async function uploadMediaFile(file,{visibility='private',folder='media'}={}){
+async function uploadMediaFile(file,{visibility='private',folder='media',registerLibrary=false}={}){
   const headers={
     ...(window.__OAH_CSRF?{'x-csrf-token':window.__OAH_CSRF}:{}),
     'x-file-name':file.name||'upload.bin',
     'x-content-type':file.type||'application/octet-stream',
     'x-visibility':visibility,
-    'x-folder':folder
+    'x-folder':folder,
+    'x-register-library':registerLibrary?'1':'0'
   };
   const res=await fetch('/api/admin/media/upload',{method:'POST',credentials:'same-origin',headers,body:file});
   let data={};try{data=await res.json()}catch{}
   if(!res.ok)throw new Error(data.error||data.message||`Upload failed (${res.status})`);
   return data.object;
+}
+
+
+function assetUrl(asset){return asset?.url||''}
+function prettyBytes(n){const v=Number(n)||0;if(v<1024)return `${v} B`;if(v<1024*1024)return `${(v/1024).toFixed(1)} KB`;if(v<1024*1024*1024)return `${(v/1024/1024).toFixed(1)} MB`;return `${(v/1024/1024/1024).toFixed(1)} GB`}
+function mediaIcon(kind){return kind==='image'?'image':kind==='audio'?'music':kind==='video'?'video':'pages'}
+
+function AssetPicker({onSelect,onClose,show,kind='image'}){
+  const [items,setItems]=useState([]),[loading,setLoading]=useState(true),[uploading,setUploading]=useState(false),[query,setQuery]=useState('');
+  const load=useCallback(()=>{
+    setLoading(true);
+    return api(`admin/media/library?visibility=public${kind?`&kind=${encodeURIComponent(kind)}`:''}`)
+      .then(d=>setItems(d.items||[]))
+      .catch(e=>show?.(e.message,true))
+      .finally(()=>setLoading(false));
+  },[kind,show]);
+  useEffect(()=>{load()},[load]);
+  async function upload(files){
+    const list=[...(files||[])];if(!list.length)return;
+    setUploading(true);
+    try{
+      for(const file of list)await uploadMediaFile(file,{visibility:'public',folder:kind==='image'?'images':'media',registerLibrary:true});
+      await load();show?.(`${list.length} media file${list.length===1?'':'s'} uploaded.`);
+    }catch(e){show?.(e.message,true)}finally{setUploading(false)}
+  }
+  const filtered=items.filter(x=>!query||`${x.title} ${x.filename} ${x.alt}`.toLowerCase().includes(query.toLowerCase()));
+  const grid=filtered.length?h('div',{className:'media-picker-grid'},filtered.map(x=>
+    h('button',{type:'button',className:'media-picker-item',key:x.id,onClick:()=>onSelect(x)},
+      x.mediaType==='image'?h('img',{src:x.url,alt:x.alt||x.title||''}):h('div',{className:'media-file-icon'},h(Icon,{name:mediaIcon(x.mediaType),size:30})),
+      h('span',null,h('strong',null,x.title||x.filename),h('small',null,prettyBytes(x.sizeBytes)))
+    )
+  )):h('div',{className:'empty empty-action'},h(Icon,{name:'image',size:34}),h('strong',null,'No matching media yet.'),h('span',{className:'small muted'},'Upload a file here and it will become available across OneArtist Hub.'));
+  return h('div',{className:'modal-backdrop media-picker-backdrop'},
+    h('div',{className:'modal media-picker-modal'},
+      h('div',{className:'modal-head'},
+        h('div',null,h('strong',null,'Choose from Media Library'),h('div',{className:'small muted'},'Select an existing asset or upload a new one without leaving this form.')),
+        h(IconButton,{icon:'close',label:'Close media library',onClick:onClose})
+      ),
+      h('div',{className:'modal-body'},
+        h('div',{className:'media-picker-toolbar'},
+          h('div',{className:'search media-search'},h(Icon,{name:'search'}),h(Input,{value:query,onChange:e=>setQuery(e.target.value),placeholder:'Search media…'})),
+          h('label',{className:'btn primary file-button'},h(Icon,{name:'upload'}),uploading?'Uploading…':'Upload New',h('input',{type:'file',accept:kind==='image'?'image/jpeg,image/png,image/webp,image/gif':'*/*',multiple:true,hidden:true,disabled:uploading,onChange:e=>{upload(e.target.files);e.target.value=''}}))
+        ),
+        loading?h('div',{className:'empty'},'Loading media…'):grid
+      )
+    )
+  );
+}
+
+function AssetField({label,value,onChange,show,folder='images',kind='image',placeholder='Select or upload media'}){
+  const [picker,setPicker]=useState(false),[uploading,setUploading]=useState(false);
+  async function upload(file){if(!file)return;setUploading(true);try{const obj=await uploadMediaFile(file,{visibility:'public',folder,registerLibrary:true});onChange(obj.url);show?.(`${file.name} uploaded to the Media Library.`)}catch(e){show?.(e.message,true)}finally{setUploading(false)}}
+  return h(React.Fragment,null,
+    h(Field,{label},h('div',{className:'asset-field'},value&&kind==='image'&&h('div',{className:'asset-preview'},h('img',{src:value,alt:''})),h('div',{className:'asset-field-main'},h(Input,{value:value||'',onChange:e=>onChange(e.target.value),placeholder}),h('div',{className:'row wrap'},h(Button,{type:'button',className:'compact',icon:'image',onClick:()=>setPicker(true)},'Media Library'),h('label',{className:'btn compact file-button'},h(Icon,{name:'upload'}),uploading?'Uploading…':'Upload',h('input',{type:'file',accept:kind==='image'?'image/jpeg,image/png,image/webp,image/gif':'*/*',hidden:true,disabled:uploading,onChange:e=>{upload(e.target.files?.[0]);e.target.value=''}})),value&&h(Button,{type:'button',className:'compact',icon:'close',onClick:()=>onChange('')},'Clear'))))),
+    picker&&h(AssetPicker,{kind,onClose:()=>setPicker(false),show,onSelect:a=>{onChange(assetUrl(a));setPicker(false)}})
+  );
+}
+
+function MediaMetaEditor({item,onClose,onSaved,show}){
+  const [title,setTitle]=useState(item.title||item.filename||''),[alt,setAlt]=useState(item.alt||''),[busy,setBusy]=useState(false);
+  async function save(e){e.preventDefault();setBusy(true);try{await api('admin/media/library/'+item.id,{method:'PUT',body:JSON.stringify({title,alt})});show('Media details updated.');await onSaved()}catch(err){show(err.message,true)}finally{setBusy(false)}}
+  return h('div',{className:'modal-backdrop'},h('form',{className:'modal media-meta-modal',onSubmit:save},h('div',{className:'modal-head'},h('strong',null,'Edit Media Details'),h(IconButton,{type:'button',icon:'close',onClick:onClose})),h('div',{className:'modal-body content-form'},item.mediaType==='image'&&h('img',{className:'media-meta-preview',src:item.url,alt:''}),h(Field,{label:'Display title'},h(Input,{value:title,onChange:e=>setTitle(e.target.value),required:true})),h(Field,{label:'Alt text / accessibility description'},h(Textarea,{value:alt,onChange:e=>setAlt(e.target.value),placeholder:'Describe the image for visitors using assistive technology.'})),h('div',{className:'small muted'},`${item.filename} · ${prettyBytes(item.sizeBytes)} · ${item.provider.toUpperCase()}`),h('div',{className:'row end'},h(Button,{type:'button',onClick:onClose},'Cancel'),h(Button,{type:'submit',variant:'primary',icon:'save',disabled:busy},busy?'Saving…':'Save Details')))));
+}
+
+function MediaManager({search,show}){
+  const [items,setItems]=useState([]),[loading,setLoading]=useState(true),[uploading,setUploading]=useState(false),[filter,setFilter]=useState('all'),[editing,setEditing]=useState(null);
+  const load=useCallback(()=>{setLoading(true);return api('admin/media/library').then(d=>setItems(d.items||[])).catch(e=>show(e.message,true)).finally(()=>setLoading(false))},[show]);
+  useEffect(()=>{load()},[load]);
+  async function upload(files){const list=[...(files||[])];if(!list.length)return;setUploading(true);try{for(const file of list){await uploadMediaFile(file,{visibility:'public',folder:file.type?.startsWith('image/')?'images':'media',registerLibrary:true})}show(`${list.length} media file${list.length===1?'':'s'} uploaded.`);await load()}catch(e){show(e.message,true)}finally{setUploading(false)}}
+  async function remove(item){if(item.usageCount>0){show(`This asset is used in ${item.usageCount} place${item.usageCount===1?'':'s'}. Replace those references before deleting it.`,true);return}if(!confirm(`Delete “${item.title||item.filename}” from ${item.provider.toUpperCase()} storage? This cannot be undone.`))return;try{await api('admin/media/library/'+item.id,{method:'DELETE'});show('Media file deleted.');await load()}catch(e){show(e.message,true)}}
+  const filtered=items.filter(x=>(filter==='all'||x.mediaType===filter)&&(!search||`${x.title} ${x.filename} ${x.alt} ${x.folder}`.toLowerCase().includes(search.toLowerCase())));
+  return h(React.Fragment,null,
+    h(PageHead,{title:'Media Library',subtitle:'Upload once, then reuse artwork, hero images and other media anywhere in OneArtist Hub.',actions:h('div',{className:'row wrap'},h(Select,{value:filter,onChange:e=>setFilter(e.target.value)},h('option',{value:'all'},'All media'),h('option',{value:'image'},'Images'),h('option',{value:'audio'},'Audio'),h('option',{value:'video'},'Video'),h('option',{value:'document'},'Documents')),h('label',{className:'btn primary file-button'},h(Icon,{name:'upload'}),uploading?'Uploading…':'Upload Media',h('input',{type:'file',multiple:true,hidden:true,disabled:uploading,onChange:e=>{upload(e.target.files);e.target.value=''}})))}),
+    editing&&h(MediaMetaEditor,{item:editing,show,onClose:()=>setEditing(null),onSaved:async()=>{setEditing(null);await load()}}),
+    loading?h('div',{className:'empty'},'Loading Media Library…'):filtered.length?h('div',{className:'media-library-grid'},filtered.map(item=>h('article',{className:'media-card card',key:item.id},
+      h('div',{className:'media-card-preview'},item.mediaType==='image'&&item.url?h('img',{src:item.url,alt:item.alt||item.title||''}):h('div',{className:'media-file-icon large'},h(Icon,{name:mediaIcon(item.mediaType),size:40})),item.usageCount>0&&h('span',{className:'media-usage pill success'},`In use · ${item.usageCount}`)),
+      h('div',{className:'media-card-copy'},h('strong',{title:item.title||item.filename},item.title||item.filename),h('div',{className:'small muted'},`${prettyBytes(item.sizeBytes)} · ${item.provider.toUpperCase()}`),h('div',{className:'small muted media-path'},item.folder||'media'),h('div',{className:'row wrap'},item.url&&h(Button,{type:'button',className:'compact',icon:'link',onClick:()=>navigator.clipboard?.writeText(location.origin+item.url)},'Copy URL'),h(IconButton,{icon:'edit',label:'Edit media details',onClick:()=>setEditing(item)}),h(IconButton,{icon:'trash',label:item.usageCount?'Asset is currently in use':'Delete media',disabled:item.usageCount>0,onClick:()=>remove(item)})))
+    ))):h('div',{className:'empty empty-action'},h(Icon,{name:'image',size:38}),h('strong',null,'Your Media Library is empty.'),h('span',{className:'small muted'},'Upload album artwork, artist photography, hero images and other reusable assets.'))
+  );
 }
 
 function Setup({onDone}){
@@ -209,7 +289,8 @@ function AdminShell({user,onLogout}){
 }
 function AdminView({active,search,select,create,createRequest,onCreateHandled,show}){
   if(active==='dashboard')return h(Dashboard,{select,create,show});
-  if(['release','track','video','tour','product','page','media'].includes(active))return h(ContentManager,{type:active,search,show,createRequest,onCreateHandled});
+  if(active==='media')return h(MediaManager,{search,show});
+  if(['release','track','video','tour','product','page'].includes(active))return h(ContentManager,{type:active,search,show,createRequest,onCreateHandled});
   if(active==='orders')return h(Orders,{show});
   if(active==='customers')return h(Customers,{show});
   if(active==='downloads')return h(DownloadsAdmin,{show});
@@ -250,23 +331,24 @@ function Dashboard({select,create,show}){
 }
 
 function AlbumImporter({onClose,onSaved,show}){
-  const [stage,setStage]=useState('pick'),[zipFile,setZipFile]=useState(null),[tracks,setTracks]=useState([]),[cover,setCover]=useState(null),[coverUrl,setCoverUrl]=useState(''),[busy,setBusy]=useState(false),[progress,setProgress]=useState('');
+  const [stage,setStage]=useState('pick'),[zipFile,setZipFile]=useState(null),[tracks,setTracks]=useState([]),[cover,setCover]=useState(null),[coverUrl,setCoverUrl]=useState(''),[coverAsset,setCoverAsset]=useState(null),[coverPicker,setCoverPicker]=useState(false),[busy,setBusy]=useState(false),[progress,setProgress]=useState('');
   const [form,setForm]=useState({title:'',artist:'',releaseType:'Album',genre:'',year:String(new Date().getFullYear()),releaseDate:today(),description:'',price:'9.99',status:'published',featured:true,previewSeconds:30,createProduct:true});
-  useEffect(()=>()=>{if(coverUrl)URL.revokeObjectURL(coverUrl)},[coverUrl]);
+  useEffect(()=>()=>{if(coverUrl?.startsWith('blob:'))URL.revokeObjectURL(coverUrl)},[coverUrl]);
   const update=(k,v)=>setForm(f=>({...f,[k]:v}));
   async function ingest(file){
     if(!file)return;setBusy(true);setProgress('Reading album ZIP…');
     try{
       const unpacked=await unpackReleaseZip(file);
-      if(!unpacked.tracks.length)throw new Error('No MP3 files were found in this ZIP. OneArtist 0.2.0 album ingest currently manages MP3 releases.');
-      setZipFile(file);setTracks(unpacked.tracks);setCover(unpacked.cover);
+      if(!unpacked.tracks.length)throw new Error('No MP3 files were found in this ZIP. OneArtist album ingest currently manages MP3 releases.');
+      setZipFile(file);setTracks(unpacked.tracks);setCover(unpacked.cover);setCoverAsset(null);
       if(coverUrl)URL.revokeObjectURL(coverUrl);setCoverUrl(unpacked.cover?URL.createObjectURL(new Blob([unpacked.cover.bytes],{type:unpacked.cover.mime})):'');
       const first=unpacked.tracks[0];
       setForm(f=>({...f,title:first.album||file.name.replace(/\.zip$/i,''),artist:first.artist||f.artist,genre:first.genre||f.genre,year:first.year||f.year}));
       setStage('edit');setProgress('');
     }catch(e){show(e.message,true)}finally{setBusy(false)}
   }
-  async function chooseCover(file){if(!file)return;const lower=file.name.toLowerCase();if(!/\.(jpe?g|png|webp)$/.test(lower)){show('Choose a JPG, PNG or WebP cover image.',true);return}const bytes=new Uint8Array(await file.arrayBuffer()),mime=file.type|| (lower.endsWith('.png')?'image/png':lower.endsWith('.webp')?'image/webp':'image/jpeg');setCover({name:file.name,path:file.name,bytes,mime});if(coverUrl)URL.revokeObjectURL(coverUrl);setCoverUrl(URL.createObjectURL(file));}
+  async function chooseCover(file){if(!file)return;const lower=file.name.toLowerCase();if(!/\.(jpe?g|png|webp)$/.test(lower)){show('Choose a JPG, PNG or WebP cover image.',true);return}const bytes=new Uint8Array(await file.arrayBuffer()),mime=file.type|| (lower.endsWith('.png')?'image/png':lower.endsWith('.webp')?'image/webp':'image/jpeg');setCover({name:file.name,path:file.name,bytes,mime});setCoverAsset(null);if(coverUrl?.startsWith('blob:'))URL.revokeObjectURL(coverUrl);setCoverUrl(URL.createObjectURL(file));}
+  async function chooseLibraryCover(asset){try{const r=await fetch(asset.url,{credentials:'same-origin'});if(!r.ok)throw new Error('Could not load the selected Media Library image.');const bytes=new Uint8Array(await r.arrayBuffer()),mime=asset.contentType||r.headers.get('content-type')||'image/jpeg';setCover({name:asset.filename,path:asset.filename,bytes,mime});setCoverAsset(asset);if(coverUrl?.startsWith('blob:'))URL.revokeObjectURL(coverUrl);setCoverUrl(asset.url);setCoverPicker(false)}catch(e){show(e.message,true)}}
   function move(from,to){if(to<0||to>=tracks.length||from===to)return;setTracks(list=>{const n=[...list],x=n.splice(from,1)[0];n.splice(to,0,x);return n.map((t,i)=>({...t,trackNo:i+1}))})}
   function drop(from,to){move(Number(from),Number(to))}
   function updateTrack(i,key,val){setTracks(list=>list.map((t,n)=>n===i?{...t,[key]:val}:t))}
@@ -280,7 +362,7 @@ function AlbumImporter({onClose,onSaved,show}){
       setProgress('Checking storage provider…');const st=await api('admin/storage/status');
       if(st.provider==='r2'&&!st.r2Bound)throw new Error('R2 is selected but the MEDIA bucket binding is missing. Configure Storage in Settings first.');
       if(st.provider==='dropbox'&&!st.dropboxConfigured)throw new Error('Dropbox storage is selected but not configured. Configure Storage in Settings first.');
-      setProgress('Uploading album artwork…');const coverExt=cover.mime==='image/png'?'png':cover.mime==='image/webp'?'webp':'jpg';const coverObj=await uploadMediaFile(bytesToFile(cover.bytes,`${form.title}-cover.${coverExt}`,cover.mime),{visibility:'public',folder:'covers'});
+      setProgress('Preparing album artwork…');const coverExt=cover.mime==='image/png'?'png':cover.mime==='image/webp'?'webp':'jpg';const coverObj=coverAsset||await uploadMediaFile(bytesToFile(cover.bytes,`${form.title}-cover.${coverExt}`,cover.mime),{visibility:'public',folder:'covers',registerLibrary:true});
       setProgress('Writing final MP3 metadata and packaging album…');const finalBytes=buildReleaseZip(tracks,{artist:form.artist,album:form.title,year:form.year,genre:form.genre,cover});const finalName=releaseZipFilename(form.artist,form.title);const packageObj=await uploadMediaFile(bytesToFile(finalBytes,finalName,'application/zip'),{visibility:'private',folder:'releases'});
       setProgress('Creating release record…');const rel=await api('admin/content',{method:'POST',body:JSON.stringify({type:'release',title:form.title,status:form.status,sortDate:form.releaseDate,featured:!!form.featured,data:{releaseType:form.releaseType,price:form.price,cover:coverObj.url,description:form.description,genre:form.genre,year:form.year,packageObjectId:packageObj.id,downloadFilename:finalName}})});
       for(let i=0;i<tracks.length;i++){
@@ -294,7 +376,11 @@ function AlbumImporter({onClose,onSaved,show}){
   const pick=h('div',{className:'album-ingest-pick'},h('div',{className:'album-drop',onDragOver:e=>e.preventDefault(),onDrop:e=>{e.preventDefault();ingest(e.dataTransfer.files?.[0])}},h(Icon,{name:'archive',size:44}),h('h2',null,'Import Album / EP / Single ZIP'),h('p',{className:'muted'},'Drop a ZIP containing MP3 tracks and optional cover artwork. Existing ID3 tags are read automatically.'),h('label',{className:'btn primary file-button'},h(Icon,{name:'upload'}),' Choose Album ZIP',h('input',{type:'file',accept:'.zip,application/zip',hidden:true,onChange:e=>ingest(e.target.files?.[0])})),busy&&h('p',{className:'small'},progress)));
   const coverPanel=h('div',{className:'album-cover-editor'},
     coverUrl?h('img',{src:coverUrl,alt:'Release cover'}):h('div',{className:'cover-placeholder'},h(Icon,{name:'image',size:42}),'No artwork'),
-    h('label',{className:'btn compact file-button'},h(Icon,{name:'image'}),' Change Artwork',h('input',{type:'file',accept:'image/jpeg,image/png,image/webp',hidden:true,onChange:e=>chooseCover(e.target.files?.[0])}))
+    h('div',{className:'row wrap'},
+      h(Button,{type:'button',className:'compact',icon:'image',onClick:()=>setCoverPicker(true)},'Media Library'),
+      h('label',{className:'btn compact file-button'},h(Icon,{name:'upload'}),' Upload Artwork',h('input',{type:'file',accept:'image/jpeg,image/png,image/webp',hidden:true,onChange:e=>chooseCover(e.target.files?.[0])}))
+    ),
+    coverPicker&&h(AssetPicker,{kind:'image',show,onClose:()=>setCoverPicker(false),onSelect:chooseLibraryCover})
   );
   const releaseFields=h('div',{className:'stack'},
     h('div',{className:'grid2'},
@@ -406,7 +492,7 @@ function ContentEditor({item,type,onClose,onSaved}){
   const basic=h('div',{className:'grid2'},h(Field,{label:'Title'},h(Input,{required:true,value:form.title,onChange:e=>set('title',e.target.value),placeholder:type==='tour'?'Atlanta, GA':''})),h(Field,{label:'Slug'},h(Input,{value:form.slug||'',onChange:e=>set('slug',e.target.value),placeholder:'auto-from-title'})));
   const meta=h('div',{className:'grid3'},h(Field,{label:'Status'},h(Select,{value:form.status,onChange:e=>set('status',e.target.value)},h('option',{value:'published'},'Published'),h('option',{value:'draft'},'Draft'))),h(Field,{label:type==='tour'?'Show date':type==='release'?'Release date':'Date'},h(Input,{type:'date',value:(form.sortDate||form.sort_date||'').slice(0,10),onChange:e=>set('sortDate',e.target.value)})),h(Field,{label:'Homepage'},h('label',{className:'row checkbox-field'},h('input',{type:'checkbox',checked:!!form.featured,onChange:e=>set('featured',e.target.checked)}),'Feature this item')));
   const foot=h('div',{className:'row between wrap editor-foot'},h('span',{className:'small muted'},type==='page'?'HTML is sanitized server-side; scripts and unsafe handlers are removed.':'Saving writes directly to D1 through the authenticated API.'),h('div',{className:'row'},h(Button,{type:'button',onClick:onClose},'Cancel'),h(Button,{type:'submit',variant:'primary',icon:'save',disabled:busy},busy?'Saving…':form.status==='draft'?'Save Draft':'Publish / Save')));
-  return h('div',{className:'modal-backdrop'},h('form',{className:'modal editor-modal',onSubmit:save},head,h('div',{className:'modal-body content-form'},basic,meta,h(TypeFields,{type,data:form.data||{},setData,releases:refs.releases,onFetchYouTube:fetchYouTube,youtubeBusy}),foot)),h(Toast,{toast}));
+  return h('div',{className:'modal-backdrop'},h('form',{className:'modal editor-modal',onSubmit:save},head,h('div',{className:'modal-body content-form'},basic,meta,h(TypeFields,{type,data:form.data||{},setData,releases:refs.releases,onFetchYouTube:fetchYouTube,youtubeBusy,show}),foot)),h(Toast,{toast}));
 }
 function VariantEditor({value,onChange}){
   const variants=normalizeVariants(value);
@@ -416,17 +502,17 @@ function VariantEditor({value,onChange}){
   return h('div',{className:'variant-editor'},h('div',{className:'row between wrap'},h('div',null,h('strong',null,'Product Variants'),h('div',{className:'small muted'},'Optional size/color/SKU inventory. If variants exist, buyers must choose one.')),h(Button,{type:'button',className:'compact',icon:'plus',onClick:add},'Add Variant')),variants.length?h('div',{className:'variant-list'},variants.map((v,i)=>h('div',{className:'variant-row card',key:v.id||i},h(Field,{label:'Name'},h(Input,{value:v.name||'',onChange:e=>update(i,'name',e.target.value),placeholder:'Black XL'})),h(Field,{label:'Size'},h(Input,{value:v.size||'',onChange:e=>update(i,'size',e.target.value),placeholder:'XL'})),h(Field,{label:'Color'},h(Input,{value:v.color||'',onChange:e=>update(i,'color',e.target.value),placeholder:'Black'})),h(Field,{label:'SKU'},h(Input,{value:v.sku||'',onChange:e=>update(i,'sku',e.target.value)})),h(Field,{label:'Inventory'},h(Input,{type:'number',min:0,value:v.inventory??'',onChange:e=>update(i,'inventory',e.target.value)})),h(Field,{label:'Price override'},h(Input,{type:'number',min:0,step:'.01',value:v.price??'',onChange:e=>update(i,'price',e.target.value),placeholder:'Base price'})),h(IconButton,{type:'button',icon:'trash',label:'Remove variant',onClick:()=>remove(i)})))):h('div',{className:'small muted variant-empty'},'No variants — the base product inventory will be used.'))
 }
 
-function TypeFields({type,data,setData,releases=[],onFetchYouTube,youtubeBusy=false}){
+function TypeFields({type,data,setData,releases=[],onFetchYouTube,youtubeBusy=false,show}){
   if(type==='release')return h(React.Fragment,null,
     h('div',{className:'grid3'},h(Field,{label:'Release type'},h(Select,{value:data.releaseType||'Album',onChange:e=>setData('releaseType',e.target.value)},['Album','EP','Single','Mixtape','Compilation'].map(v=>h('option',{key:v},v)))),h(Field,{label:'Genre'},h(Input,{value:data.genre||'',onChange:e=>setData('genre',e.target.value)})),h(Field,{label:'Price (optional)'},h(Input,{type:'number',min:0,step:'.01',value:data.price??'',onChange:e=>setData('price',e.target.value)}))),
-    h('div',{className:'grid2'},h(Field,{label:'Cover image URL'},h(Input,{value:data.cover||'',onChange:e=>setData('cover',e.target.value),placeholder:'https://… or /art/cover.svg'})),h(Field,{label:'Catalog / UPC (optional)'},h(Input,{value:data.catalogNo||'',onChange:e=>setData('catalogNo',e.target.value)}))),
+    h('div',{className:'grid2'},h(AssetField,{label:'Cover artwork',value:data.cover||'',onChange:v=>setData('cover',v),show,folder:'covers',kind:'image',placeholder:'Choose from Media Library, upload, or paste URL'}),h(Field,{label:'Catalog / UPC (optional)'},h(Input,{value:data.catalogNo||'',onChange:e=>setData('catalogNo',e.target.value)}))),
     h(Field,{label:'Description'},h(Textarea,{value:data.description||'',onChange:e=>setData('description',e.target.value)})),
     h('div',{className:'grid3'},h(Field,{label:'Spotify URL'},h(Input,{value:data.spotifyUrl||'',onChange:e=>setData('spotifyUrl',e.target.value)})),h(Field,{label:'Apple Music URL'},h(Input,{value:data.appleMusicUrl||'',onChange:e=>setData('appleMusicUrl',e.target.value)})),h(Field,{label:'YouTube Music URL'},h(Input,{value:data.youtubeMusicUrl||'',onChange:e=>setData('youtubeMusicUrl',e.target.value)})))
   );
   if(type==='track')return h(React.Fragment,null,
     h('div',{className:'grid2'},h(Field,{label:'Release'},h(Select,{required:true,value:data.releaseId||'',onChange:e=>setData('releaseId',e.target.value)},h('option',{value:''},'Choose release…'),releases.map(r=>h('option',{key:r.id,value:r.id},r.title)))),h(Field,{label:'Track number'},h(Input,{type:'number',min:1,value:data.trackNo||1,onChange:e=>setData('trackNo',Math.max(1,Number(e.target.value)||1))}))),
     h(Field,{label:'Preview audio URL'},h(Input,{required:true,value:data.audio||'',onChange:e=>setData('audio',e.target.value),placeholder:'/demo/higher-ground.wav or https://…'})),
-    h('div',{className:'grid3'},h(Field,{label:'Cover URL'},h(Input,{value:data.cover||'',onChange:e=>setData('cover',e.target.value)})),h(Field,{label:'Duration seconds'},h(Input,{type:'number',min:0,value:data.duration||'',onChange:e=>setData('duration',Number(e.target.value)||0)})),h(Field,{label:'Track price (optional)'},h(Input,{type:'number',min:0,step:'.01',value:data.price??'',onChange:e=>setData('price',e.target.value)}))),
+    h('div',{className:'grid3'},h(AssetField,{label:'Track artwork',value:data.cover||'',onChange:v=>setData('cover',v),show,folder:'covers',kind:'image'}),h(Field,{label:'Duration seconds'},h(Input,{type:'number',min:0,value:data.duration||'',onChange:e=>setData('duration',Number(e.target.value)||0)})),h(Field,{label:'Track price (optional)'},h(Input,{type:'number',min:0,step:'.01',value:data.price??'',onChange:e=>setData('price',e.target.value)}))),
     h('label',{className:'row small'},h('input',{type:'checkbox',checked:!!data.explicit,onChange:e=>setData('explicit',e.target.checked)}),'Explicit content')
   );
   if(type==='video'){
@@ -444,7 +530,7 @@ function TypeFields({type,data,setData,releases=[],onFetchYouTube,youtubeBusy=fa
   );
   if(type==='product')return h(React.Fragment,null,
     h('div',{className:'grid3'},h(Field,{label:'Base price'},h(Input,{required:true,type:'number',min:0,step:'.01',value:data.price??'',onChange:e=>setData('price',e.target.value)})),h(Field,{label:'Product type'},h(Select,{value:data.kind||'physical',onChange:e=>setData('kind',e.target.value)},h('option',{value:'physical'},'Physical merch'),h('option',{value:'digital'},'Digital download'))),h(Field,{label:'Base inventory'},h(Input,{type:'number',min:0,value:data.inventory??'',disabled:data.kind==='digital',onChange:e=>setData('inventory',e.target.value),placeholder:'Used when no variants'}))),
-    h('div',{className:'grid2'},h(Field,{label:'Product image URL'},h(Input,{value:data.image||'',onChange:e=>setData('image',e.target.value)})),h(Field,{label:'Base SKU'},h(Input,{value:data.sku||'',onChange:e=>setData('sku',e.target.value)}))),
+    h('div',{className:'grid2'},h(AssetField,{label:'Product image',value:data.image||'',onChange:v=>setData('image',v),show,folder:'products',kind:'image'}),h(Field,{label:'Base SKU'},h(Input,{value:data.sku||'',onChange:e=>setData('sku',e.target.value)}))),
     data.kind==='digital'&&h(React.Fragment,null,data.mediaObjectId&&h('div',{className:'managed-file-badge'},h(Icon,{name:'archive'}),h('div',null,h('strong',null,'Managed OneArtist package'),h('div',{className:'small muted'},data.downloadFilename||data.mediaObjectId))),h(Field,{label:'Legacy Dropbox path (optional fallback)'},h(Input,{value:data.dropboxPath||'',onChange:e=>setData('dropboxPath',e.target.value),placeholder:'/OneArtist/downloads/album.zip'}))),
     data.kind==='physical'&&h(VariantEditor,{value:data.variants,onChange:v=>setData('variants',v)}),
     h(Field,{label:'Description'},h(Textarea,{value:data.description||'',onChange:e=>setData('description',e.target.value)}))
@@ -566,8 +652,8 @@ function DownloadsAdmin({show}){
 }
 
 function Settings({show,focus}){
-  const [settings,setSettings]=useState(null),[ints,setInts]=useState([]),[paypal,setPaypal]=useState({clientId:'',clientSecret:'',environment:'sandbox',webhookId:''}),[dropbox,setDropbox]=useState({accessToken:''}),[emailCfg,setEmailCfg]=useState({service:'resend',apiKey:'',apiToken:'',accountId:'',fromName:'',fromEmail:'',replyTo:'',configured:false}),[prefs,setPrefs]=useState(null),[testTo,setTestTo]=useState(''),[webhooks,setWebhooks]=useState([]),[storage,setStorage]=useState({provider:'dropbox',r2Bound:false,dropboxConfigured:false,localAvailable:false}),[busy,setBusy]=useState('');
-  const load=useCallback(()=>Promise.all([api('admin/settings'),api('admin/integrations'),api('admin/email/config'),api('admin/notification-preferences'),api('admin/paypal/config'),api('admin/webhooks'),api('admin/storage/status')]).then(([s,i,e,n,p,w,st])=>{setSettings(s.settings);setInts(i.integrations||[]);setEmailCfg(x=>({...x,...e,apiKey:'',apiToken:''}));setPrefs(n.preferences);setTestTo(e.fromEmail||'');setPaypal(x=>({...x,clientId:p.clientId||'',environment:p.environment||'sandbox',webhookId:p.webhookId||'',clientSecret:''}));setWebhooks(w.events||[]);setStorage(st)}).catch(e=>show(e.message,true)),[show]);
+  const [settings,setSettings]=useState(null),[ints,setInts]=useState([]),[paypal,setPaypal]=useState({clientId:'',clientSecret:'',environment:'sandbox',webhookId:''}),[paypalConnect,setPaypalConnect]=useState({available:false,status:'not_connected',merchantId:''}),[dropbox,setDropbox]=useState({accessToken:''}),[s3,setS3]=useState({endpoint:'',region:'us-east-1',bucket:'',accessKeyId:'',secretAccessKey:'',forcePathStyle:true}),[emailCfg,setEmailCfg]=useState({service:'resend',apiKey:'',apiToken:'',accountId:'',smtpHost:'',smtpPort:587,smtpSecure:false,smtpUser:'',smtpPassword:'',fromName:'',fromEmail:'',replyTo:'',configured:false,smtpAvailable:false}),[emailQueue,setEmailQueue]=useState([]),[prefs,setPrefs]=useState(null),[testTo,setTestTo]=useState(''),[webhooks,setWebhooks]=useState([]),[storage,setStorage]=useState({provider:'dropbox',r2Bound:false,dropboxConfigured:false,s3Configured:false,localAvailable:false}),[busy,setBusy]=useState('');
+  const load=useCallback(()=>Promise.all([api('admin/settings'),api('admin/integrations'),api('admin/email/config'),api('admin/notification-preferences'),api('admin/paypal/config'),api('admin/webhooks'),api('admin/storage/status'),api('admin/paypal/connect/status'),api('admin/email/queue')]).then(([stg,i,e,n,p,w,st,pc,eq])=>{setSettings(stg.settings);setInts(i.integrations||[]);setEmailCfg(x=>({...x,...e,apiKey:'',apiToken:'',smtpPassword:''}));setPrefs(n.preferences);setTestTo(e.fromEmail||'');setPaypal(x=>({...x,clientId:p.clientId||'',environment:p.environment||'sandbox',webhookId:p.webhookId||'',clientSecret:''}));setWebhooks(w.events||[]);setStorage(st);setPaypalConnect(pc);setEmailQueue(eq.queue||[]);setS3(x=>({...x,endpoint:st.s3Endpoint||'',region:st.s3Region||'us-east-1',bucket:st.s3Bucket||'',accessKeyId:st.s3AccessKeyId||'',forcePathStyle:st.s3ForcePathStyle!==false,secretAccessKey:''}))}).catch(e=>show(e.message,true)),[show]);
   useEffect(()=>{load()},[load]); if(!settings||!prefs)return h('div',{className:'empty'},'Loading settings…');
   const artist=settings.artist||{},site=settings.site||{},commerce=settings.commerce||{};const update=(group,key,val)=>setSettings(s=>({...s,[group]:{...(s[group]||{}),[key]:val}}));
   async function save(){try{const d=await api('admin/settings',{method:'PUT',body:JSON.stringify({settings:{artist:settings.artist,site:settings.site,commerce:settings.commerce,socials:settings.socials}})});setSettings(d.settings);show('Settings saved.')}catch(e){show(e.message,true)}}
@@ -575,20 +661,24 @@ function Settings({show,focus}){
   async function savePrefs(){try{const d=await api('admin/notification-preferences',{method:'PUT',body:JSON.stringify(prefs)});setPrefs(d.preferences);show('Notification preferences saved.')}catch(e){show(e.message,true)}}
   async function testEmail(){setBusy('email-test');try{await api('admin/email/test',{method:'POST',body:JSON.stringify({to:testTo})});show('Test email sent.')}catch(e){show(e.message,true)}finally{setBusy('')}}
   async function testPayPal(){setBusy('paypal-test');try{const d=await api('admin/paypal/test',{method:'POST'});show(`PayPal ${d.environment} credentials authenticated successfully.`)}catch(e){show(e.message,true)}finally{setBusy('')}}
+  async function testS3(){setBusy('s3-test');try{await api('admin/storage/s3/test',{method:'POST'});show('S3-compatible storage read/write/delete test passed.')}catch(e){show(e.message,true)}finally{setBusy('')}}
+  async function connectPayPal(){setBusy('paypal-connect');try{const d=await api('admin/paypal/connect/start',{method:'POST'});location.href=d.actionUrl}catch(e){show(e.message,true)}finally{setBusy('')}}
+  async function retryEmailQueue(){setBusy('email-retry');try{const d=await api('admin/email/queue/retry',{method:'POST'});show(`Retried ${d.processed||0} queued email(s).`);await load()}catch(e){show(e.message,true)}finally{setBusy('')}}
   async function saveStorage(provider){setBusy('storage');try{const d=await api('admin/storage/config',{method:'PUT',body:JSON.stringify({provider})});setStorage(x=>({...x,provider:d.provider}));show(`${d.provider.toUpperCase()} is now the active media storage provider.`)}catch(e){show(e.message,true)}finally{setBusy('')}}
   const prefToggle=(key,label)=>h('label',{className:'notification-pref'},h('input',{type:'checkbox',checked:!!prefs[key],onChange:e=>setPrefs({...prefs,[key]:e.target.checked})}),h('span',null,label));
   const emailReady=emailCfg.configured;
   return h(React.Fragment,null,
     h(PageHead,{title:focus==='homepage'?'Homepage & Artist':'Settings',subtitle:'Brand, hero, commerce, storage, email and secure integrations.',actions:h(Button,{variant:'primary',icon:'save',onClick:save},'Save Settings')}),
     h('div',{className:'stack'},
-      h('section',{className:'card form-card'},h('h3',null,'Artist Profile'),h('div',{className:'grid2'},h(Field,{label:'Artist / stage name'},h(Input,{value:artist.name||'',onChange:e=>update('artist','name',e.target.value)})),h(Field,{label:'Genre'},h(Input,{value:artist.genre||'',onChange:e=>update('artist','genre',e.target.value)})),h(Field,{label:'Location'},h(Input,{value:artist.location||'',onChange:e=>update('artist','location',e.target.value)})),h(Field,{label:'Profile image URL'},h(Input,{value:artist.profileImage||'',onChange:e=>update('artist','profileImage',e.target.value)}))),h(Field,{label:'Biography'},h(Textarea,{value:artist.bio||'',onChange:e=>update('artist','bio',e.target.value)}))),
-      h('section',{className:'card form-card'},h('h3',null,'Homepage Hero'),h('div',{className:'grid2'},h(Field,{label:'Site title'},h(Input,{value:site.title||'',onChange:e=>update('site','title',e.target.value)})),h(Field,{label:'Artist logo SVG URL'},h(Input,{value:site.logoUrl||'',onChange:e=>update('site','logoUrl',e.target.value),placeholder:'/images/artist-logo.svg'})),h(Field,{label:'Accent color'},h(Input,{type:'color',value:site.accent||'#b45cff',onChange:e=>update('site','accent',e.target.value)})),h(Field,{label:'Hero headline'},h(Input,{value:site.heroTitle||'',onChange:e=>update('site','heroTitle',e.target.value)})),h(Field,{label:'Hero image URL'},h(Input,{value:site.heroImage||'',onChange:e=>update('site','heroImage',e.target.value)}))),h(Field,{label:'Hero subtitle'},h(Textarea,{value:site.heroSubtitle||'',onChange:e=>update('site','heroSubtitle',e.target.value)}))),
+      h('section',{className:'card form-card'},h('h3',null,'Artist Profile'),h('div',{className:'grid2'},h(Field,{label:'Artist / stage name'},h(Input,{value:artist.name||'',onChange:e=>update('artist','name',e.target.value)})),h(Field,{label:'Genre'},h(Input,{value:artist.genre||'',onChange:e=>update('artist','genre',e.target.value)})),h(Field,{label:'Location'},h(Input,{value:artist.location||'',onChange:e=>update('artist','location',e.target.value)})),h(AssetField,{label:'Profile image',value:artist.profileImage||'',onChange:v=>update('artist','profileImage',v),show,folder:'artist',kind:'image'})),h(Field,{label:'Biography'},h(Textarea,{value:artist.bio||'',onChange:e=>update('artist','bio',e.target.value)}))),
+      h('section',{className:'card form-card'},h('h3',null,'Homepage Hero'),h('div',{className:'grid2'},h(Field,{label:'Site title'},h(Input,{value:site.title||'',onChange:e=>update('site','title',e.target.value)})),h(AssetField,{label:'Artist logo',value:site.logoUrl||'',onChange:v=>update('site','logoUrl',v),show,folder:'branding',kind:'image',placeholder:'Choose logo or paste URL'}),h(Field,{label:'Accent color'},h(Input,{type:'color',value:site.accent||'#b45cff',onChange:e=>update('site','accent',e.target.value)})),h(Field,{label:'Hero headline'},h(Input,{value:site.heroTitle||'',onChange:e=>update('site','heroTitle',e.target.value)})),h(AssetField,{label:'Hero image',value:site.heroImage||'',onChange:v=>update('site','heroImage',v),show,folder:'hero',kind:'image',placeholder:'Choose hero image or paste URL'})),h(Field,{label:'Hero subtitle'},h(Textarea,{value:site.heroSubtitle||'',onChange:e=>update('site','heroSubtitle',e.target.value)}))),
       h('section',{className:'card form-card'},h('h3',null,'Commerce'),h('div',{className:'grid3'},h(Field,{label:'Currency'},h(Input,{value:commerce.currency||'USD',onChange:e=>update('commerce','currency',e.target.value.toUpperCase().slice(0,3))})),h(Field,{label:'Flat physical shipping'},h(Input,{type:'number',step:'.01',min:0,value:commerce.flatShipping??0,onChange:e=>update('commerce','flatShipping',Number(e.target.value))})),h(Field,{label:'Digital download limit'},h(Input,{type:'number',min:1,max:50,value:commerce.downloadsMax??5,onChange:e=>update('commerce','downloadsMax',Number(e.target.value))})))),
       h('section',{className:'card form-card'},
         h('div',{className:'row between wrap'},h('div',null,h('h3',null,'Media Storage'),h('p',{className:'small muted'},'Album artwork, preview audio and protected release ZIPs are stored outside the database.')),h('span',{className:'pill success'},(storage.provider||'not configured').toUpperCase())),
         h('div',{className:'provider-grid'},
           h('button',{type:'button',className:'provider-card '+(storage.provider==='r2'?'active':''),disabled:!storage.r2Bound||busy==='storage',onClick:()=>saveStorage('r2')},h(Icon,{name:'archive'}),h('strong',null,'Cloudflare R2'),h('span',null,storage.r2Bound?'Bucket binding MEDIA detected':'Add an R2 bucket binding named MEDIA')),
           h('button',{type:'button',className:'provider-card '+(storage.provider==='dropbox'?'active':''),disabled:!storage.dropboxConfigured||busy==='storage',onClick:()=>saveStorage('dropbox')},h(Icon,{name:'download'}),h('strong',null,'Dropbox'),h('span',null,storage.dropboxConfigured?'Encrypted token configured':'Configure Dropbox below')),
+          h('button',{type:'button',className:'provider-card '+(storage.provider==='s3'?'active':''),disabled:!storage.s3Configured||busy==='storage',onClick:()=>saveStorage('s3')},h(Icon,{name:'archive'}),h('strong',null,'S3 Compatible'),h('span',null,storage.s3Configured?'Encrypted S3 credentials configured':'Configure endpoint below')),
           storage.localAvailable&&h('button',{type:'button',className:'provider-card '+(storage.provider==='local'?'active':''),disabled:busy==='storage',onClick:()=>saveStorage('local')},h(Icon,{name:'archive'}),h('strong',null,'VPS Local Storage'),h('span',null,'Private server media directory'))
         ),
         h('p',{className:'small muted'},'The Album ZIP importer uses whichever provider is active here. Public previews are served through OneArtist; paid packages remain protected behind entitlement checks.')
@@ -599,24 +689,28 @@ function Settings({show,focus}){
         h('div',{className:'grid2'},h(Field,{label:'PayPal Client ID'},h(Input,{value:paypal.clientId,onChange:e=>setPaypal({...paypal,clientId:e.target.value})})),h(Field,{label:'Environment'},h(Select,{value:paypal.environment,onChange:e=>setPaypal({...paypal,environment:e.target.value})},h('option',{value:'sandbox'},'Sandbox / Testing'),h('option',{value:'live'},'Live')))),
         h('div',{className:'grid2'},h(Field,{label:'PayPal Client Secret'},h(Input,{type:'password',value:paypal.clientSecret,onChange:e=>setPaypal({...paypal,clientSecret:e.target.value}),placeholder:ints.some(x=>x.provider==='paypal')?'Leave blank to keep current secret':'Never stored in GitHub'})),h(Field,{label:'PayPal Webhook ID'},h(Input,{value:paypal.webhookId||'',onChange:e=>setPaypal({...paypal,webhookId:e.target.value}),placeholder:'From PayPal Developer Dashboard'}))),
         h(Field,{label:'Webhook listener URL'},h('div',{className:'copy-field'},h(Input,{readOnly:true,value:location.origin+'/api/paypal/webhook'}),h(Button,{type:'button',className:'compact',icon:'link',onClick:()=>navigator.clipboard?.writeText(location.origin+'/api/paypal/webhook')},'Copy'))),
-        h('p',{className:'small muted'},'Seller-login onboarding can be added through PayPal platform APIs later; direct merchant credentials remain supported so OneArtist never depends on platform-partner approval.'),
+        h('p',{className:'small muted'},'Direct merchant credentials remain supported. PayPal Connect can be enabled separately when your PayPal platform/partner credentials and OneArtist Connect service are ready.'),
         h('div',{className:'row wrap'},h(Button,{icon:'lock',disabled:busy==='paypal',onClick:()=>saveInt('paypal',paypal)},busy==='paypal'?'Saving…':'Save PayPal Securely'),h(Button,{icon:'check',disabled:busy==='paypal-test'||!ints.some(x=>x.provider==='paypal'),onClick:testPayPal},busy==='paypal-test'?'Testing…':'Test Connection'))
       ),
+      h('section',{className:'card form-card'},h('div',{className:'row between wrap'},h('div',null,h('h3',null,'PayPal Connect — Partner Onboarding'),h('p',{className:'small muted'},'Optional seller-login onboarding through PayPal Partner Referrals. No universal partner secret is stored in customer OneArtist code.')),h('span',{className:'pill '+(paypalConnect.status==='connected'?'success':'')},paypalConnect.status==='connected'?'CONNECTED':paypalConnect.available?'READY':'NOT CONFIGURED')),paypalConnect.merchantId&&h('p',{className:'small muted'},`Merchant ID: ${paypalConnect.merchantId}`),h(Button,{icon:'link',disabled:busy==='paypal-connect'||!paypalConnect.available,onClick:connectPayPal},busy==='paypal-connect'?'Opening PayPal…':paypalConnect.status==='connected'?'Reconnect PayPal':'Connect PayPal'),!paypalConnect.available&&h('p',{className:'small muted'},'Set ONEARTIST_CONNECT_URL and ONEARTIST_CONNECT_TOKEN as deployment secrets after your central Connect service is deployed.')),
       h('section',{className:'card form-card'},h('div',{className:'row between wrap'},h('div',null,h('h3',null,'PayPal Webhook Health'),h('p',{className:'small muted'},paypal.webhookId?'Signed server-to-server events are enabled.':'Add the PayPal Webhook ID above before using Live checkout.')),h(Button,{className:'compact',icon:'repeat',onClick:load},'Refresh')),webhooks.length?h('div',{className:'webhook-events'},webhooks.slice(0,6).map(w=>h('div',{className:'webhook-row',key:w.event_id},h('span',{className:'webhook-state '+w.status},w.status),h('div',null,h('strong',null,w.event_type),h('div',{className:'small muted'},new Date(w.created_at).toLocaleString(),w.error?' · '+w.error:''))))):h('div',{className:'small muted'},'No verified webhook events received yet.')),
+      h('section',{className:'card form-card'},h('div',{className:'row between'},h('h3',null,'S3-Compatible Storage'),storage.s3Configured&&h('span',{className:'pill success'},'Configured')),h('p',{className:'small muted'},'Works with Amazon S3 and S3-compatible providers using AWS Signature V4. Secrets are encrypted in the OneArtist integrations store.'),h('div',{className:'grid2'},h(Field,{label:'Endpoint URL'},h(Input,{value:s3.endpoint,onChange:e=>setS3({...s3,endpoint:e.target.value}),placeholder:'https://s3.us-east-1.amazonaws.com'})),h(Field,{label:'Region'},h(Input,{value:s3.region,onChange:e=>setS3({...s3,region:e.target.value}),placeholder:'us-east-1'})),h(Field,{label:'Bucket'},h(Input,{value:s3.bucket,onChange:e=>setS3({...s3,bucket:e.target.value})})),h(Field,{label:'Access Key ID'},h(Input,{value:s3.accessKeyId,onChange:e=>setS3({...s3,accessKeyId:e.target.value})})),h(Field,{label:'Secret Access Key'},h(Input,{type:'password',value:s3.secretAccessKey,onChange:e=>setS3({...s3,secretAccessKey:e.target.value}),placeholder:storage.s3Configured?'Leave blank to keep current secret':'Encrypted secret'})),h('label',{className:'notification-pref'},h('input',{type:'checkbox',checked:s3.forcePathStyle!==false,onChange:e=>setS3({...s3,forcePathStyle:e.target.checked})}),h('span',null,'Use path-style bucket URL'))),h('div',{className:'row wrap'},h(Button,{icon:'lock',disabled:busy==='s3',onClick:()=>saveInt('s3',s3)},busy==='s3'?'Saving…':'Save S3 Securely'),h(Button,{icon:'check',disabled:busy==='s3-test'||!storage.s3Configured,onClick:testS3},busy==='s3-test'?'Testing…':'Test Read / Write / Delete'))),
       h('section',{className:'card form-card'},h('div',{className:'row between'},h('h3',null,'Dropbox Storage'),ints.some(x=>x.provider==='dropbox')&&h('span',{className:'pill success'},'Configured')),h('p',{className:'small muted'},'Optional alternative to R2. OneArtist stores a protected storage key instead of exposing a permanent Dropbox URL.'),h(Field,{label:'Dropbox access token'},h(Input,{type:'password',value:dropbox.accessToken,onChange:e=>setDropbox({accessToken:e.target.value}),placeholder:'Encrypted in D1'})),h(Button,{icon:'lock',disabled:busy==='dropbox',onClick:()=>saveInt('dropbox',dropbox)},busy==='dropbox'?'Saving…':'Save Dropbox Securely')),
       h('section',{className:'card form-card email-settings'},
         h('div',{className:'row between wrap'},h('div',null,h('h3',null,'Email & Sales Notifications'),h('p',{className:'small muted'},'Use Resend on the free/serverless path, or Cloudflare Email Service when your account/domain is enabled for outbound sending. Credentials are encrypted in D1.')),emailReady&&h('span',{className:'pill success'},'Email Ready')),
         h('div',{className:'grid2'},
-          h(Field,{label:'Provider'},h(Select,{value:emailCfg.service||'resend',onChange:e=>setEmailCfg({...emailCfg,service:e.target.value,configured:false})},h('option',{value:'resend'},'Resend'),h('option',{value:'cloudflare'},'Cloudflare Email Service'))),
+          h(Field,{label:'Provider'},h(Select,{value:emailCfg.service||'resend',onChange:e=>setEmailCfg({...emailCfg,service:e.target.value,configured:false})},h('option',{value:'resend'},'Resend'),h('option',{value:'brevo'},'Brevo'),h('option',{value:'cloudflare'},'Cloudflare Email Service'),h('option',{value:'smtp',disabled:!emailCfg.smtpAvailable},'SMTP (VPS / Self-hosted)'))),
           h(Field,{label:'From name'},h(Input,{value:emailCfg.fromName||'',onChange:e=>setEmailCfg({...emailCfg,fromName:e.target.value}),placeholder:'Artist Store'})),
           h(Field,{label:'From email'},h(Input,{type:'email',value:emailCfg.fromEmail||'',onChange:e=>setEmailCfg({...emailCfg,fromEmail:e.target.value}),placeholder:'sales@yourdomain.com'})),
           h(Field,{label:'Reply-to email'},h(Input,{type:'email',value:emailCfg.replyTo||'',onChange:e=>setEmailCfg({...emailCfg,replyTo:e.target.value}),placeholder:'artist@yourdomain.com'}))
         ),
         emailCfg.service==='cloudflare'?
-          h('div',{className:'grid2'},h(Field,{label:'Cloudflare Account ID'},h(Input,{value:emailCfg.accountId||'',onChange:e=>setEmailCfg({...emailCfg,accountId:e.target.value}),placeholder:'Cloudflare account ID'})),h(Field,{label:'Cloudflare Email API token'},h(Input,{type:'password',value:emailCfg.apiToken||'',onChange:e=>setEmailCfg({...emailCfg,apiToken:e.target.value}),placeholder:emailReady?'Enter only to replace current token':'Encrypted secret'}))):
-          h(Field,{label:'Resend API key'},h(Input,{type:'password',value:emailCfg.apiKey||'',onChange:e=>setEmailCfg({...emailCfg,apiKey:e.target.value}),placeholder:emailReady?'Enter only to replace current key':'re_…'})),
+          h('div',{className:'grid2'},h(Field,{label:'Cloudflare Account ID'},h(Input,{value:emailCfg.accountId||'',onChange:e=>setEmailCfg({...emailCfg,accountId:e.target.value}),placeholder:'Cloudflare account ID'})),h(Field,{label:'Cloudflare Email API token'},h(Input,{type:'password',value:emailCfg.apiToken||'',onChange:e=>setEmailCfg({...emailCfg,apiToken:e.target.value}),placeholder:emailReady?'Enter only to replace current token':'Encrypted secret'}))):emailCfg.service==='smtp'?
+          h('div',{className:'grid2'},h(Field,{label:'SMTP host'},h(Input,{value:emailCfg.smtpHost||'',onChange:e=>setEmailCfg({...emailCfg,smtpHost:e.target.value}),placeholder:'smtp.yourhost.com'})),h(Field,{label:'SMTP port'},h(Input,{type:'number',value:emailCfg.smtpPort||587,onChange:e=>setEmailCfg({...emailCfg,smtpPort:Number(e.target.value)||587})})),h(Field,{label:'SMTP username'},h(Input,{value:emailCfg.smtpUser||'',onChange:e=>setEmailCfg({...emailCfg,smtpUser:e.target.value})})),h(Field,{label:'SMTP password'},h(Input,{type:'password',value:emailCfg.smtpPassword||'',onChange:e=>setEmailCfg({...emailCfg,smtpPassword:e.target.value}),placeholder:emailReady?'Leave blank to keep current password':'Encrypted secret'})),h('label',{className:'notification-pref'},h('input',{type:'checkbox',checked:!!emailCfg.smtpSecure,onChange:e=>setEmailCfg({...emailCfg,smtpSecure:e.target.checked})}),h('span',null,'Use implicit TLS / SMTPS'))):
+          h(Field,{label:emailCfg.service==='brevo'?'Brevo API key':'Resend API key'},h(Input,{type:'password',value:emailCfg.apiKey||'',onChange:e=>setEmailCfg({...emailCfg,apiKey:e.target.value}),placeholder:emailReady?'Enter only to replace current key':emailCfg.service==='brevo'?'xkeysib-…':'re_…'})),
         emailCfg.service==='cloudflare'&&h('div',{className:'provider-note'},h(Icon,{name:'mail'}),h('div',null,h('strong',null,'Cloudflare sending note'),h('p',{className:'small muted'},'Your sending domain must use Cloudflare DNS. Sending to arbitrary customer addresses currently requires Workers Paid; verified destination addresses can be used for free testing.'))),
         h('div',{className:'row wrap'},h(Button,{icon:'lock',disabled:busy==='email',onClick:()=>saveInt('email',emailCfg)},busy==='email'?'Saving…':'Save Email Securely'),h(Field,{label:'Test recipient'},h(Input,{type:'email',value:testTo,onChange:e=>setTestTo(e.target.value),placeholder:'you@example.com'})),h(Button,{icon:'mail',onClick:testEmail,disabled:busy==='email-test'||!emailReady},busy==='email-test'?'Sending…':'Send Test Email')),
+        h('div',{className:'provider-note'},h(Icon,{name:'repeat'}),h('div',null,h('strong',null,'Durable Email Queue'),h('p',{className:'small muted'},`${emailQueue.filter(x=>x.status==='retry'||x.status==='dead'||x.status==='pending').length} message(s) waiting or needing attention. Failed sends retry automatically with backoff.`),h(Button,{className:'compact',icon:'repeat',disabled:busy==='email-retry',onClick:retryEmailQueue},busy==='email-retry'?'Retrying…':'Retry Failed Now'))),
         h('div',{className:'notification-prefs'},prefToggle('new_order','Email artist for new orders'),prefToggle('digital_sale','Digital sale alerts'),prefToggle('physical_sale','Physical merch sale alerts'),prefToggle('shipping_updates','Customer shipping/tracking emails'),prefToggle('security_alerts','Security/account emails'),prefToggle('low_inventory','Low inventory alerts'),h(Field,{label:'Low inventory threshold'},h(Input,{type:'number',min:1,max:100,value:prefs.low_inventory_threshold||5,onChange:e=>setPrefs({...prefs,low_inventory_threshold:Number(e.target.value)||5})}))),h(Button,{icon:'save',onClick:savePrefs},'Save Notification Preferences')
       )
     )

@@ -78,6 +78,8 @@ CREATE TABLE IF NOT EXISTS email_log (
   provider TEXT, provider_message_id TEXT, error TEXT, created_at TEXT NOT NULL, sent_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_email_log_created ON email_log(created_at DESC);
+CREATE TABLE IF NOT EXISTS email_queue (id TEXT PRIMARY KEY, recipient TEXT NOT NULL, template TEXT NOT NULL, subject TEXT NOT NULL, html TEXT NOT NULL, text_body TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at TEXT NOT NULL, last_error TEXT, provider TEXT, provider_message_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, sent_at TEXT);
+CREATE INDEX IF NOT EXISTS idx_email_queue_due ON email_queue(status,next_attempt_at);
 
 -- OneArtist Hub 0.1.3 — commerce + customer accounts
 CREATE TABLE IF NOT EXISTS customer_magic_tokens (

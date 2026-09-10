@@ -5,12 +5,12 @@ import { execFileSync } from 'node:child_process';
 const root=resolve(process.cwd());
 let fail=false;
 const required=[
-  'index.html','package.json','src/app.js','src/media-ingest.js','src/styles.css','functions/api/[[path]].js','database/schema.sql','database/schema.mysql.sql','self-host/server.mjs','self-host/mysql-adapter.mjs','self-host/sql-compat.mjs','self-host/local-storage.mjs','self-host/install-ubuntu.sh',
+  'index.html','package.json','src/app.js','src/media-ingest.js','src/styles.css','functions/api/[[path]].js','database/schema.sql','database/schema.mysql.sql','self-host/server.mjs','self-host/mysql-adapter.mjs','self-host/sql-compat.mjs','self-host/local-storage.mjs','self-host/install-ubuntu.sh','self-host/install-ubuntu-sqlite.sh','self-host/sqlite-adapter.mjs','connect-service/paypal-worker.js',
   'public/_headers','public/_redirects','public/_routes.json','public/art/oneartist-logo.svg','public/demo/higher-ground.wav'
 ];
 for(const f of required){try{await readFile(resolve(root,f));console.log('PASS required',f)}catch{console.error('FAIL missing',f);fail=true}}
 
-for(const f of ['src/app.js','src/media-ingest.js','functions/api/[[path]].js','self-host/server.mjs','self-host/mysql-adapter.mjs','self-host/sql-compat.mjs','self-host/local-storage.mjs','scripts/check.mjs']){
+for(const f of ['src/app.js','src/media-ingest.js','functions/api/[[path]].js','self-host/server.mjs','self-host/mysql-adapter.mjs','self-host/sql-compat.mjs','self-host/local-storage.mjs','self-host/sqlite-adapter.mjs','connect-service/paypal-worker.js','scripts/check.mjs']){
   try{execFileSync(process.execPath,['--check',resolve(root,f)],{stdio:'pipe'});console.log('PASS syntax',f)}catch(e){console.error('FAIL syntax',f,String(e.stderr||e.message));fail=true}
 }
 
@@ -37,7 +37,7 @@ if(!/auth\/forgot-password/.test(api)||!/auth\/reset-password/.test(api)||!/pass
 if(!/admin\/notifications/.test(api)||!/notification_preferences/.test(api)||!/notification-popover/.test(css)){console.error('FAIL D1 notifications center');fail=true}else console.log('PASS D1 notifications center');
 if(!/api.resend.com\/emails/.test(api)||!/admin\/email\/test/.test(api)||!/Email & Sales Notifications/.test(app)){console.error('FAIL transactional email integration');fail=true}else console.log('PASS transactional email integration');
 if(!/MIGRATION_012/.test(api)||!/ensureUpgrade012/.test(api)){console.error('FAIL automatic 0.1.2 migration');fail=true}else console.log('PASS automatic 0.1.2 migration');
-if(!/version:'0.2.0'/.test(api)||pkg.version!=='0.2.0'){console.error('FAIL 0.2.0 version markers');fail=true}else console.log('PASS 0.2.0 version markers');
+if(!/version:'0.2.2'/.test(api)||pkg.version!=='0.2.2'){console.error('FAIL 0.2.2 version markers');fail=true}else console.log('PASS 0.2.2 version markers');
 
 
 if(!/customer\/magic-link/.test(api)||!/customer\/orders/.test(api)||!/customer\/download/.test(api)||!/function CustomerAccount\(/.test(app)){console.error('FAIL passwordless customer account flow');fail=true}else console.log('PASS passwordless customer account flow');
@@ -61,6 +61,12 @@ if(!/media_objects/.test(api)||!/admin\/media\/upload/.test(api)||!/api\/media\/
 if(!/Cloudflare Email Service/.test(app)||!/email\/sending\/send/.test(api)||!/replyTo/.test(api)||!/reply_to/.test(api)){console.error('FAIL Cloudflare Email Service adapter');fail=true}else console.log('PASS Cloudflare Email Service adapter');
 if(!/admin\/paypal\/test/.test(api)||!/Test Connection/.test(app)){console.error('FAIL PayPal credential test');fail=true}else console.log('PASS PayPal credential test');
 if(!/MIGRATION_020/.test(api)||!/ensureUpgrade020/.test(api)){console.error('FAIL automatic 0.2.0 migration');fail=true}else console.log('PASS automatic 0.2.0 migration');
+if(!/function MediaManager\(/.test(app)||!/function AssetPicker\(/.test(app)||!/function AssetField\(/.test(app)||!/admin\/media\/library/.test(api)){console.error('FAIL Media Library and reusable asset picker');fail=true}else console.log('PASS Media Library and reusable asset picker');
+if(!/x-register-library/.test(app)||!/registerLibrary/.test(api)||!/upsertMediaMeta/.test(api)){console.error('FAIL direct form upload registration');fail=true}else console.log('PASS direct form upload registration');
+if(!/deleteStoredObject/.test(api)||!/LOCAL_STORAGE\?\.delete/.test(api)||!/async delete\(key\)/.test(await readFile(resolve(root,'self-host/local-storage.mjs'),'utf8'))){console.error('FAIL provider-backed media deletion');fail=true}else console.log('PASS provider-backed media deletion');
+if(!/usageCount/.test(app)||!/usageCount/.test(api)||!/Replace those references before deleting/.test(api)){console.error('FAIL in-use media delete protection');fail=true}else console.log('PASS in-use media delete protection');
+if(!/x-content-type-options':'nosniff'/.test(api)||!/cross-origin-resource-policy':'same-site'/.test(api)||!/disposition=\['image','audio','video'\]/.test(api)){console.error('FAIL public media response hardening');fail=true}else console.log('PASS public media response hardening');
+if(!/Hero image/.test(app)||!/Profile image/.test(app)||!/Product image/.test(app)||!/Cover artwork/.test(app)||!/chooseLibraryCover/.test(app)){console.error('FAIL asset picker integration across forms');fail=true}else console.log('PASS asset picker integration across forms');
 const mysqlSchema=await readFile(resolve(root,'database/schema.mysql.sql'),'utf8');
 const mysqlAdapter=await readFile(resolve(root,'self-host/mysql-adapter.mjs'),'utf8');
 const selfHostServer=await readFile(resolve(root,'self-host/server.mjs'),'utf8');
@@ -76,6 +82,15 @@ const compatSamples=[
 ];
 try{for(const q of compatSamples)sqlCompat.assertMySQLCompatibleSQL(q);console.log('PASS MySQL SQLite-compat SQL translation')}catch(e){console.error('FAIL MySQL SQL translation',e.message);fail=true}
 try{execFileSync('bash',['-n',resolve(root,'self-host/install-ubuntu.sh')],{stdio:'pipe'});console.log('PASS Ubuntu installer shell syntax')}catch(e){console.error('FAIL Ubuntu installer shell syntax',String(e.stderr||e.message));fail=true}
+
+const sqliteAdapter=await readFile(resolve(root,'self-host/sqlite-adapter.mjs'),'utf8');
+const connectWorker=await readFile(resolve(root,'connect-service/paypal-worker.js'),'utf8');
+if(!/s3Request/.test(api)||!/admin\/storage\/s3\/test/.test(api)||!/S3-Compatible Storage/.test(app)){console.error('FAIL S3-compatible storage adapter');fail=true}else console.log('PASS S3-compatible storage adapter');
+if(!/api\.brevo\.com\/v3\/smtp\/email/.test(api)||!/value:'brevo'/.test(app)||!/SMTP_SEND/.test(api)||!/nodemailer/.test(selfHostServer)){console.error('FAIL Brevo and SMTP email adapters');fail=true}else console.log('PASS Brevo and SMTP email adapters');
+if(!/email_queue/.test(api)||!/processEmailQueue/.test(api)||!/Durable Email Queue/.test(app)||!/admin\/email\/queue\/retry/.test(api)){console.error('FAIL durable email retry queue');fail=true}else console.log('PASS durable email retry queue');
+if(!/SQLiteD1Adapter/.test(sqliteAdapter)||!/DB_DRIVER/.test(selfHostServer)||!/better-sqlite3/.test(await readFile(resolve(root,'self-host/package.json'),'utf8'))){console.error('FAIL self-host SQLite deployment profile');fail=true}else console.log('PASS self-host SQLite deployment profile');
+if(!/partner-referrals/.test(connectWorker)||!/merchant-integrations/.test(connectWorker)||!/admin\/paypal\/connect\/start/.test(api)||!/PayPal Connect — Partner Onboarding/.test(app)){console.error('FAIL PayPal Connect partner onboarding architecture');fail=true}else console.log('PASS PayPal Connect partner onboarding architecture');
+try{execFileSync('bash',['-n',resolve(root,'self-host/install-ubuntu-sqlite.sh')],{stdio:'pipe'});console.log('PASS SQLite Ubuntu installer shell syntax')}catch(e){console.error('FAIL SQLite Ubuntu installer shell syntax',String(e.stderr||e.message));fail=true}
 
 const pbkdf2Iterations=Number((api.match(/iterations:(\d+)/)||[])[1]||0);
 if(!pbkdf2Iterations||pbkdf2Iterations>100000){console.error('FAIL Cloudflare PBKDF2 iteration limit',pbkdf2Iterations);fail=true}else console.log('PASS Cloudflare PBKDF2 iteration limit',pbkdf2Iterations);

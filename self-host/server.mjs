@@ -5,6 +5,8 @@ import {existsSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {webcrypto} from 'node:crypto';
 import {createMySQLAdapter} from './mysql-adapter.mjs';
+import {createSQLiteAdapter} from './sqlite-adapter.mjs';
+import nodemailer from 'nodemailer';
 import {LocalStorageAdapter} from './local-storage.mjs';
 import {route} from '../functions/api/[[path]].js';
 
@@ -13,11 +15,10 @@ if(!globalThis.btoa)globalThis.btoa=s=>Buffer.from(s,'binary').toString('base64'
 if(!globalThis.atob)globalThis.atob=s=>Buffer.from(s,'base64').toString('binary');
 const here=path.dirname(fileURLToPath(import.meta.url)),root=path.resolve(here,'..'),dist=path.join(root,'dist');
 function env(name,def=''){return process.env[name]??def}
-const DB=await createMySQLAdapter({host:env('DB_HOST','127.0.0.1'),port:env('DB_PORT','3306'),user:env('DB_USER'),password:env('DB_PASSWORD'),database:env('DB_NAME','oneartist_hub')});
-const schema=await readFile(path.join(root,'database/schema.mysql.sql'),'utf8');
-for(const statement of schema.split(/;\s*(?:\r?\n|$)/).map(x=>x.trim()).filter(Boolean))await DB.pool.query(statement);
+const DB_DRIVER=env('DB_DRIVER','mysql').toLowerCase();
+let DB;if(DB_DRIVER==='sqlite'){DB=await createSQLiteAdapter({file:env('SQLITE_FILE',path.join(root,'storage','oneartist.sqlite'))});const schema=await readFile(path.join(root,'database/schema.sql'),'utf8');await DB.exec(schema);}else{DB=await createMySQLAdapter({host:env('DB_HOST','127.0.0.1'),port:env('DB_PORT','3306'),user:env('DB_USER'),password:env('DB_PASSWORD'),database:env('DB_NAME','oneartist_hub')});const schema=await readFile(path.join(root,'database/schema.mysql.sql'),'utf8');for(const statement of schema.split(/;\s*(?:\r?\n|$)/).map(x=>x.trim()).filter(Boolean))await DB.pool.query(statement);}
 const LOCAL_STORAGE=new LocalStorageAdapter(env('MEDIA_ROOT',path.join(root,'storage')));
-const appEnv={DB,LOCAL_STORAGE,ONEARTIST_SETUP_KEY:env('ONEARTIST_SETUP_KEY'),APP_ENCRYPTION_KEY:env('APP_ENCRYPTION_KEY'),MAX_UPLOAD_BYTES:Number(env('MAX_UPLOAD_BYTES',String(512*1024*1024)))};
+const appEnv={DB,LOCAL_STORAGE,ONEARTIST_SETUP_KEY:env('ONEARTIST_SETUP_KEY'),APP_ENCRYPTION_KEY:env('APP_ENCRYPTION_KEY'),MAX_UPLOAD_BYTES:Number(env('MAX_UPLOAD_BYTES',String(512*1024*1024))),ONEARTIST_CONNECT_URL:env('ONEARTIST_CONNECT_URL'),ONEARTIST_CONNECT_TOKEN:env('ONEARTIST_CONNECT_TOKEN'),SMTP_SEND:async({config,to,subject,html,text})=>{const transport=nodemailer.createTransport({host:config.smtpHost,port:Number(config.smtpPort||587),secure:!!config.smtpSecure,auth:{user:config.smtpUser,pass:config.smtpPassword}});const from=config.fromName?`${config.fromName} <${config.fromEmail}>`:config.fromEmail;return transport.sendMail({from,to,subject,html,text,replyTo:config.replyTo||undefined})}};
 if(!appEnv.ONEARTIST_SETUP_KEY||!appEnv.APP_ENCRYPTION_KEY)throw new Error('ONEARTIST_SETUP_KEY and APP_ENCRYPTION_KEY are required.');
 const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp','.wav':'audio/wav','.json':'application/json'};
 const server=http.createServer(async(req,res)=>{try{

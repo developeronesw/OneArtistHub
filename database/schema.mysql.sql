@@ -83,3 +83,5 @@ CREATE TABLE IF NOT EXISTS media_objects (
   content_type VARCHAR(190), size_bytes BIGINT NOT NULL DEFAULT 0, visibility VARCHAR(40) NOT NULL DEFAULT 'private', created_at VARCHAR(40) NOT NULL,
   INDEX idx_media_objects_visibility(visibility,created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS email_queue (id VARCHAR(190) PRIMARY KEY, recipient VARCHAR(255) NOT NULL, template VARCHAR(120) NOT NULL, subject VARCHAR(500) NOT NULL, html LONGTEXT NOT NULL, text_body LONGTEXT NOT NULL, status VARCHAR(40) NOT NULL DEFAULT 'pending', attempts INT NOT NULL DEFAULT 0, next_attempt_at VARCHAR(40) NOT NULL, last_error TEXT, provider VARCHAR(60), provider_message_id VARCHAR(255), created_at VARCHAR(40) NOT NULL, updated_at VARCHAR(40) NOT NULL, sent_at VARCHAR(40), INDEX idx_email_queue_due(status,next_attempt_at)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
