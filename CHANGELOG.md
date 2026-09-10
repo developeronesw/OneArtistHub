@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0 HF1 — Theme-Safe Player Geometry — 2026-09-10
+
+- Locked the persistent glass music player to one global viewport position and width contract across every public theme.
+- Removed Artist OS desktop/tablet/mobile left-offset and viewport-width overrides that pushed the player outside its centered shell.
+- Themes can still change player colors, borders, glow and accent styling, but cannot change player placement or dimensions.
+- Preserved player queue, expanded player, continuous playback, responsive mini-player behavior, cart spacing and all 0.3.0 theme geometry.
+
 ## 0.3.0 — Mockup-Locked Public Themes — 2026-09-10
 
 - Rebuilt Midnight Cinema to match the approved cinematic black/gold concept: framed desktop canvas, editorial serif identity, cinematic hero, gold CTA system, featured-release panel, video/merch split, tour rows, and matching player treatment.
