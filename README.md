@@ -1,9 +1,9 @@
-# OneArtist Hub 0.2.2 — Media Library & Universal Asset Picker
+# OneArtist Hub 0.3.0 — Media Library & Universal Asset Picker
 
 **Official admin design:** Aurora Glass Studio  
 **Public themes:** Midnight Cinema, Artist OS, Neon Editorial
 
-OneArtist Hub is a responsive artist CMS, storefront, continuous music player and portable JavaScript backend. **Cloudflare Pages + Pages Functions + D1** remains the recommended serverless profile, while the same application also supports a **Node.js + MySQL/MariaDB + NGINX** self-hosted/VPS profile. PHP is not required. Version 0.2.2 adds a real provider-backed Media Library and reusable asset picker across the artist site.
+OneArtist Hub is a responsive artist CMS, storefront, continuous music player and portable JavaScript backend. **Cloudflare Pages + Pages Functions + D1** remains the recommended serverless profile, while the same application also supports a **Node.js + MySQL/MariaDB + NGINX** self-hosted/VPS profile. PHP is not required. Version 0.3.0 rebuilds all three public themes as distinct mockup-locked visual systems while preserving the provider-backed Media Library and reusable asset picker.
 
 ## What is functional in this build
 
@@ -142,3 +142,8 @@ OneArtist Hub supports **Resend** and **Cloudflare Email Service** from **Settin
 OneArtist Hub supports D1/MySQL/MariaDB/SQLite databases; R2/Dropbox/S3-compatible/VPS-local storage; Resend/Brevo/Cloudflare Email/SMTP mail; and PayPal Direct plus optional partner-onboarding architecture. See `docs/INTEGRATIONS-0.2.2.md`.
 
 Release QA notes: `docs/RELEASE-QA-0.2.2.md`.
+
+
+## 0.3.0 mockup-locked public themes
+
+The three public themes are intentionally separate visual systems, not recolors of one shared template. Midnight Cinema, Artist OS, and Neon Editorial reproduce the approved concept-board geometry and visual hierarchy while binding to the same live OneArtist content, commerce, analytics, media and continuous-player data. Theme switching remains immediate through `site.publicTheme`.

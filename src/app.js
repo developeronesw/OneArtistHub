@@ -817,13 +817,62 @@ function PublicSite({path,nav}){
     previewTheme&&h('div',{className:'theme-preview-banner'},h(Icon,{name:'eye'}),` Previewing ${previewTheme==='os'?'Artist OS':previewTheme==='neon'?'Neon Editorial':'Midnight Cinema'} — activation is controlled from OneArtist Hub Admin.`),
     h('header',{className:'public-nav'},h('a',{href:'/',className:'public-brand-link',onClick:e=>{e.preventDefault();go('/')}},brand),h('nav',{className:'public-links'},links.map(([to,label])=>h('a',{key:to,href:to,onClick:e=>{e.preventDefault();go(to)}},label))),h(IconButton,{icon:mobileNav?'close':'menu',label:'Toggle navigation',className:'mobile-public-menu',onClick:()=>setMobileNav(v=>!v)})),
     mobileNav&&h('nav',{className:'mobile-public-panel'},links.map(([to,label])=>h('a',{key:to,href:to,onClick:e=>{e.preventDefault();go(to)}},label))),
-    custom?h(CustomPage,{page:custom}):route==='/music'?h(MusicPage,{releases:allReleases,tracks,setCurrent}):route==='/videos'?h(VideosPage,{videos:allVideos,openVideo}):route==='/tour'?h(TourPage,{tours:allTours}):route==='/shop'?h(ShopPage,{products:allProducts,addCart}):h(HomePage,{site,artist,releases:homeReleases,videos:homeVideos,tours:homeTours,products:homeProducts,openVideo,addCart,playTrackByRelease}),
+    custom?h(CustomPage,{page:custom}):route==='/music'?h(MusicPage,{releases:allReleases,tracks,setCurrent}):route==='/videos'?h(VideosPage,{videos:allVideos,openVideo}):route==='/tour'?h(TourPage,{tours:allTours}):route==='/shop'?h(ShopPage,{products:allProducts,addCart}):h(HomePage,{theme,site,artist,releases:homeReleases,videos:homeVideos,tours:homeTours,products:homeProducts,openVideo,addCart,playTrackByRelease}),
     h('button',{className:'cart-fab',onClick:()=>setCartOpen(true),'aria-label':'Open cart'},h(Icon,{name:'cart'}),cart.reduce((n,x)=>n+x.qty,0)>0&&h('span',{className:'cart-count'},cart.reduce((n,x)=>n+x.qty,0))),
     tracks.length>0&&h(Player,{tracks,current,setCurrent}),video&&h(VideoModal,{video,onClose:()=>setVideo(null)}),cartOpen&&h(CartModal,{cart,setCart,onClose:()=>setCartOpen(false),show}),h(Toast,{toast})
   )
 }
 
-function HomePage({site,artist,releases,videos,tours,products,openVideo,addCart,playTrackByRelease}){return h(React.Fragment,null,h('section',{className:'public-hero',style:{backgroundImage:`linear-gradient(90deg,rgba(2,3,8,.9),rgba(2,3,8,.25)),url('${site.heroImage||'/art/hero-aurora.svg'}')`}},h('div',{className:'hero-copy'},h('div',{className:'pill'},artist.genre||'Independent Artist'),h('h1',null,site.heroTitle||artist.name||'OneArtist Hub'),h('p',null,site.heroSubtitle||artist.bio||''),h('div',{className:'row wrap'},h(Button,{variant:'primary',icon:'play',onClick:()=>releases[0]&&playTrackByRelease(releases[0])},'Listen Now'),h('a',{className:'btn',href:'#releases'},'Explore Releases')))),h(ReleaseSection,{releases,onPlay:playTrackByRelease}),h(VideoSection,{videos,onOpen:openVideo}),h(ProductSection,{products,onAdd:addCart}),h(TourSection,{tours}))}
+function HomePage({theme,site,artist,releases,videos,tours,products,openVideo,addCart,playTrackByRelease}){
+  const common={site,artist,releases,videos,tours,products,openVideo,addCart,playTrackByRelease};
+  if(theme==='os')return h(ArtistOSHome,common);
+  if(theme==='neon')return h(NeonEditorialHome,common);
+  return h(MidnightCinemaHome,common);
+}
+function MidnightCinemaHome({site,artist,releases,videos,tours,products,openVideo,addCart,playTrackByRelease}){
+  const featured=releases[0];
+  return h('main',{className:'theme-home midnight-home'},
+    h('section',{className:'mc-hero',style:{backgroundImage:`linear-gradient(90deg,rgba(2,4,5,.78),rgba(2,4,5,.08)),url('${site.heroImage||featured?.data.cover||'/art/hero-aurora.svg'}')`}},
+      h('div',{className:'mc-kicker'},artist.genre||'MUSIC FOR A BRIGHTER NIGHT'),
+      h('div',{className:'mc-copy'},h('h1',null,site.heroTitle||artist.name||'ARTIST'),h('p',{className:'mc-quote'},site.heroSubtitle||artist.bio||'Some songs feel like places.'),h('div',{className:'mc-actions'},h(Button,{variant:'primary',icon:'play',onClick:()=>featured&&playTrackByRelease(featured)},'Listen To The New Album'),videos[0]&&h(Button,{icon:'play',onClick:()=>openVideo(videos[0])},'Watch The Film'))),
+      h('div',{className:'mc-side-mantra'},'MUSIC',h('br'), 'PEOPLE',h('br'),'PLACES',h('br'),'A BRIGHTER NIGHT')),
+    featured&&h('section',{className:'mc-feature-frame'},h('div',{className:'mc-feature-cover'},h('img',{src:featured.data.cover||'/art/neon-skies.svg',alt:featured.title})),h('div',{className:'mc-feature-copy'},h('span',{className:'mc-eyebrow'},'FEATURED RELEASE'),h('small',null,featured.data.releaseType||'NEW ALBUM'),h('h2',null,featured.title),h('p',null,featured.data.description||'A cinematic journey through the latest chapter.'),h('div',{className:'row wrap'},h(Button,{variant:'primary',icon:'play',onClick:()=>playTrackByRelease(featured)},'Listen Now'),h('a',{className:'btn',href:'/music'},'View Tracklist'))),h('blockquote',null,'“A soundtrack built for the rest of us.”')),
+    h('div',{className:'mc-split'},h(VideoSection,{videos,onOpen:openVideo}),h(ProductSection,{products,onAdd:addCart})),
+    h(TourSection,{tours}),
+    h('section',{className:'mc-ending'},h('div',{style:{backgroundImage:`url('${site.heroImage||'/art/hero-aurora.svg'}')`}}),h('p',null,'GOOD MUSIC. BRIGHTER PEOPLE.'),h('strong',null,'A BRIGHTER NIGHT AHEAD.'))
+  )
+}
+function ArtistOSHome({site,artist,releases,videos,tours,products,openVideo,addCart,playTrackByRelease}){
+  const featured=releases[0];
+  return h('main',{className:'theme-home os-home'},
+    h('section',{className:'os-hero',style:{backgroundImage:`radial-gradient(circle at 44% 44%,rgba(77,129,255,.08),rgba(3,12,28,.64) 58%),url('${site.heroImage||featured?.data.cover||'/art/hero-aurora.svg'}')`}},
+      h('div',{className:'os-identity'},h('span',{className:'os-eyebrow'},artist.genre||'ARTIST · PRODUCER · DREAMER'),h('h1',null,site.heroTitle||artist.name||'ARTIST'),h('p',null,site.heroSubtitle||artist.bio||'Sounds for a brighter tomorrow.'),h('div',{className:'row wrap'},h(Button,{variant:'primary',icon:'play',onClick:()=>featured&&playTrackByRelease(featured)},'Play Artist Mix'),h(Button,{icon:'heart'},'Follow'))),
+      featured&&h('article',{className:'os-feature card'},h('small',null,'NEW ALBUM'),h('h2',null,featured.title),h('span',null,'OUT NOW'),h(IconButton,{icon:'arrow',label:'Play release',onClick:()=>playTrackByRelease(featured)})),
+      h('aside',{className:'os-mantra'},'MUSIC',h('br'),'PEOPLE',h('br'),'PLANET',h('br'),'A BRIGHTER',h('br'),'TOMORROW')),
+    h('section',{className:'os-grid'},
+      h('div',{className:'os-panel'},h(ReleaseSection,{releases,onPlay:playTrackByRelease})),
+      h('div',{className:'os-panel'},h(VideoSection,{videos,onOpen:openVideo})),
+      h('div',{className:'os-panel'},h(TourSection,{tours})),
+      h('div',{className:'os-panel os-merch'},h(ProductSection,{products,onAdd:addCart})),
+      h('div',{className:'os-panel os-community'},h('span',{className:'os-eyebrow'},'COMMUNITY'),h('h2',null,'Join the Conversation'),h('div',{className:'os-avatar-stack'},[1,2,3,4,5].map(n=>h('i',{key:n}))),h('p',null,'Music brings people together. Stay close to the artist universe.')),
+      h('div',{className:'os-panel os-quote',style:{backgroundImage:`linear-gradient(rgba(3,11,25,.2),rgba(3,11,25,.72)),url('${site.heroImage||'/art/hero-aurora.svg'}')`}},h('blockquote',null,'“A kinder planet sounds better anyway.”'))
+    )
+  )
+}
+function NeonEditorialHome({site,artist,releases,videos,tours,products,openVideo,addCart,playTrackByRelease}){
+  const featured=releases[0];
+  return h('main',{className:'theme-home neon-home'},
+    h('section',{className:'ne-hero'},
+      h('div',{className:'ne-copy'},h('span',{className:'ne-eyebrow'},artist.genre||'MUSIC LIVES LOUDER'),h('h1',null,site.heroTitle||artist.name||'SAME STARS DIFFERENT US'),h('p',null,site.heroSubtitle||artist.bio||'A sound for the dreamers, the outsiders, and everyone in between.'),h('div',{className:'row wrap'},h(Button,{variant:'primary',icon:'play',onClick:()=>featured&&playTrackByRelease(featured)},'Listen Now'),videos[0]&&h(Button,{icon:'play',onClick:()=>openVideo(videos[0])},'Watch The Film'))),
+      h('div',{className:'ne-image',style:{backgroundImage:`url('${site.heroImage||featured?.data.cover||'/art/hero-aurora.svg'}')`}},h('span',null,'MUSIC',h('br'),'PEOPLE',h('br'),'PLACES',h('br'),'A BRIGHTER YOU')),
+      h('aside',{className:'ne-brand'},h('strong',null,artist.name||site.title||'ARTIST'),h('span',null,'ALTERNATIVE',h('br'),'POP',h('br'),'FOR A LOUDER',h('br'),'TOMORROW'))),
+    featured&&h('section',{className:'ne-feature'},h('div',null,h('span',{className:'ne-eyebrow'},'LATEST RELEASE'),h('h2',null,featured.title),h('p',null,featured.data.description||'A telepathic journey through late nights, bigger dreams and everything in between.'),h(Button,{variant:'primary',icon:'play',onClick:()=>playTrackByRelease(featured)},'Listen Now')),h('div',{className:'ne-cover'},h('img',{src:featured.data.cover||'/art/neon-skies.svg',alt:featured.title})),h('blockquote',null,'“Somewhere in the chaos we still find the music.”')),
+    h(ReleaseSection,{releases,onPlay:playTrackByRelease}),
+    h('div',{className:'ne-two'},h(VideoSection,{videos,onOpen:openVideo}),h(ProductSection,{products,onAdd:addCart})),
+    h(TourSection,{tours}),
+    h('section',{className:'ne-footer-poster'},h('strong',null,'MORE THAN MUSIC'),h('span',null,'ARTISTS BUILD BIGGER.'))
+  )
+}
 function ReleaseSection({releases,onPlay}){return h('section',{className:'public-section',id:'releases'},h('div',{className:'section-title'},h('h2',null,'Latest Releases'),h('span',{className:'muted'},'Albums · EPs · Singles')),releases.length?h('div',{className:'release-grid'},releases.map(r=>h('article',{className:'release-card card',key:r.id,onClick:()=>onPlay(r)},h('div',{className:'cover'},h('img',{src:r.data.cover||'/art/neon-skies.svg',alt:r.title})),h('div',{className:'card-copy'},h('div',{className:'small muted'},r.data.releaseType||'Release'),h('h3',null,r.title),h('div',{className:'row between'},h('span',{className:'small'},fmtDate(r.sort_date)),h(Icon,{name:'play'})))))):h('div',{className:'empty'},'No releases yet.'))}
 function VideoSection({videos,onOpen}){return h('section',{className:'public-section'},h('div',{className:'section-title'},h('h2',null,'Videos'),h('span',{className:'muted'},'Watch without leaving the site')),videos.length?h('div',{className:'video-grid'},videos.map(v=>h('article',{className:'video-card card',key:v.id,onClick:()=>onOpen(v)},h('div',{className:'cover'},h('img',{src:v.data.thumbnail||(v.data.youtubeId?`https://img.youtube.com/vi/${v.data.youtubeId}/hqdefault.jpg`:'/art/hero-aurora.svg'),alt:v.title})),h('div',{className:'card-copy'},h('h3',null,v.title),h('div',{className:'row'},h(Icon,{name:'play'}),h('span',{className:'small muted'},'Play Video')))))):h('div',{className:'empty'},'No videos yet.'))}
 function ProductCard({product,onAdd}){const variants=normalizeVariants(product.data.variants),[variantId,setVariantId]=useState(variants[0]?.id||''),chosen=variants.find(v=>v.id===variantId)||null,price=chosen&&chosen.price!==''?chosen.price:product.data.price,stock=chosen?chosen.inventory:product.data.inventory,soldOut=product.data.kind==='physical'&&stock!==''&&stock!=null&&Number(stock)<=0;return h('article',{className:'product-card card'},h('div',{className:'cover'},h('img',{src:product.data.image||'/art/hoodie.svg',alt:product.title})),h('div',{className:'card-copy stack'},h('div',{className:'row between'},h('h3',null,product.title),h('strong',null,fmtMoney(price))),product.data.description&&h('p',{className:'small muted product-description'},product.data.description),variants.length>0&&h(Field,{label:'Choose option'},h(Select,{value:variantId,onChange:e=>setVariantId(e.target.value)},variants.map(v=>h('option',{key:v.id,value:v.id,disabled:v.inventory!==''&&Number(v.inventory)<=0},`${v.name||[v.size,v.color].filter(Boolean).join(' / ')||'Option'}${v.inventory!==''?` — ${Number(v.inventory)>0?`${v.inventory} left`:'Sold out'}`:''}`)))),h(Button,{variant:'primary',icon:'cart',disabled:soldOut||variants.length>0&&!chosen,onClick:()=>onAdd(product,chosen)},soldOut?'Sold Out':'Add to Cart')))}

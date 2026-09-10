@@ -1,9 +1,9 @@
 {
   "name": "oneartist-hub",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
-  "description": "OneArtist Hub 0.2.2 \u2014 Infrastructure & Integrations",
+  "description": "OneArtist Hub 0.3.0 \u2014 Mockup-Locked Public Themes",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

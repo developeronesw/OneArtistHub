@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0 — Mockup-Locked Public Themes — 2026-09-10
+
+- Rebuilt Midnight Cinema to match the approved cinematic black/gold concept: framed desktop canvas, editorial serif identity, cinematic hero, gold CTA system, featured-release panel, video/merch split, tour rows, and matching player treatment.
+- Rebuilt Artist OS to match the approved futuristic creator-OS concept: fixed desktop navigation rail, immersive moon/hero workspace, feature-release card, modular dashboard-style content grid, community/quote modules, and blue glass player.
+- Rebuilt Neon Editorial to match the approved high-fashion neon concept: asymmetrical editorial hero, oversized split-color headline, image-led composition, latest-release feature, dense music/video/merch grids, poster typography, and pink/cyan player treatment.
+- Added independent tablet/mobile geometry for each theme instead of collapsing all three through one generic responsive template.
+- Preserved existing content APIs, commerce, media pipeline, player continuity, analytics, D1/MySQL/SQLite portability, storage providers, email providers, and PayPal integrations.
+
 ## 0.2.2 — Infrastructure & Integrations
 - Added S3-compatible media storage with AWS Signature V4 and connection testing.
 - Added Brevo and self-hosted SMTP transactional email adapters.
