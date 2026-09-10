@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.0 — Media & Deployment
+
+- Added OneArtist Album Ingest for Album/EP/Single MP3 ZIPs.
+- Added automatic ID3 reading, drag/touch track ordering, editable metadata, external or embedded artwork detection/replacement and customer-ready ZIP generation.
+- Finalization strips prior ID3v2/ID3v1 tags, rewrites clean ID3v2.4 title, artist, album, track/total, year and genre metadata, embeds album artwork, and records full track duration while generating previews.
+- Added automatic preview-audio generation and upload during release finalization.
+- Added provider-backed media object records with protected R2, Dropbox and VPS-local storage support.
+- Digital products can now reference managed private media objects instead of requiring permanent Dropbox paths.
+- Added Cloudflare Email Service REST adapter while preserving Resend.
+- Added PayPal direct-merchant credential test from Settings.
+- Added self-hosted Node.js + MySQL/MariaDB + local-storage profile, NGINX/systemd Ubuntu installer and MySQL schema.
+- Added automatic 0.2.0 D1 migration; existing 0.1.3 content, orders, counters, accounts, themes and integrations remain intact.
+- Preserved SVG-only application icon/logo contract and Aurora Glass Studio responsive dashboard.
+
 ## 0.1.3 — Commerce & Customer Accounts
 
 - Added passwordless customer accounts with 20-minute email magic links and 30-day secure customer sessions.

@@ -5,12 +5,12 @@ import { execFileSync } from 'node:child_process';
 const root=resolve(process.cwd());
 let fail=false;
 const required=[
-  'index.html','package.json','src/app.js','src/styles.css','functions/api/[[path]].js','database/schema.sql',
+  'index.html','package.json','src/app.js','src/media-ingest.js','src/styles.css','functions/api/[[path]].js','database/schema.sql','database/schema.mysql.sql','self-host/server.mjs','self-host/mysql-adapter.mjs','self-host/sql-compat.mjs','self-host/local-storage.mjs','self-host/install-ubuntu.sh',
   'public/_headers','public/_redirects','public/_routes.json','public/art/oneartist-logo.svg','public/demo/higher-ground.wav'
 ];
 for(const f of required){try{await readFile(resolve(root,f));console.log('PASS required',f)}catch{console.error('FAIL missing',f);fail=true}}
 
-for(const f of ['src/app.js','functions/api/[[path]].js','scripts/check.mjs']){
+for(const f of ['src/app.js','src/media-ingest.js','functions/api/[[path]].js','self-host/server.mjs','self-host/mysql-adapter.mjs','self-host/sql-compat.mjs','self-host/local-storage.mjs','scripts/check.mjs']){
   try{execFileSync(process.execPath,['--check',resolve(root,f)],{stdio:'pipe'});console.log('PASS syntax',f)}catch(e){console.error('FAIL syntax',f,String(e.stderr||e.message));fail=true}
 }
 
@@ -37,7 +37,7 @@ if(!/auth\/forgot-password/.test(api)||!/auth\/reset-password/.test(api)||!/pass
 if(!/admin\/notifications/.test(api)||!/notification_preferences/.test(api)||!/notification-popover/.test(css)){console.error('FAIL D1 notifications center');fail=true}else console.log('PASS D1 notifications center');
 if(!/api.resend.com\/emails/.test(api)||!/admin\/email\/test/.test(api)||!/Email & Sales Notifications/.test(app)){console.error('FAIL transactional email integration');fail=true}else console.log('PASS transactional email integration');
 if(!/MIGRATION_012/.test(api)||!/ensureUpgrade012/.test(api)){console.error('FAIL automatic 0.1.2 migration');fail=true}else console.log('PASS automatic 0.1.2 migration');
-if(!/version:'0.1.3'/.test(api)||pkg.version!=='0.1.3'){console.error('FAIL 0.1.3 version markers');fail=true}else console.log('PASS 0.1.3 version markers');
+if(!/version:'0.2.0'/.test(api)||pkg.version!=='0.2.0'){console.error('FAIL 0.2.0 version markers');fail=true}else console.log('PASS 0.2.0 version markers');
 
 
 if(!/customer\/magic-link/.test(api)||!/customer\/orders/.test(api)||!/customer\/download/.test(api)||!/function CustomerAccount\(/.test(app)){console.error('FAIL passwordless customer account flow');fail=true}else console.log('PASS passwordless customer account flow');
@@ -51,6 +51,31 @@ if(!/MIGRATION_013/.test(api)||!/ensureUpgrade013/.test(api)){console.error('FAI
 if(!/idx_order_transactions_provider_id/.test(api)){console.error('FAIL PayPal transaction idempotency index');fail=true}else console.log('PASS PayPal transaction idempotency index');
 if(!/webhookId/.test(app)||!/admin\/paypal\/config/.test(api)){console.error('FAIL safe PayPal webhook configuration UI');fail=true}else console.log('PASS safe PayPal webhook configuration UI');
 if(!/paypalCaptureOrRecover/.test(api)||!/waitForFinalizedOrder/.test(api)||!/PayPal payment is not fully captured yet/.test(api)||!/recovered:cap.recovered/.test(api)){console.error('FAIL PayPal capture race recovery');fail=true}else console.log('PASS PayPal capture race recovery');
+
+
+if(!pkg.dependencies?.fflate){console.error('FAIL album ZIP dependency');fail=true}else console.log('PASS album ZIP dependency');
+if(!/function AlbumImporter\(/.test(app)||!/Import Album ZIP/.test(app)||!/Finalize & Publish Release/.test(app)){console.error('FAIL album ZIP ingest UI');fail=true}else console.log('PASS album ZIP ingest UI');
+const mediaIngest=await readFile(resolve(root,'src/media-ingest.js'),'utf8');
+if(!/unpackReleaseZip/.test(mediaIngest)||!/writeMp3Metadata/.test(mediaIngest)||!/buildReleaseZip/.test(mediaIngest)||!/APIC/.test(mediaIngest)||!/embeddedCover/.test(mediaIngest)||!/previewDuration/.test(mediaIngest)){console.error('FAIL MP3 metadata/package pipeline');fail=true}else console.log('PASS MP3 metadata/package pipeline');
+if(!/media_objects/.test(api)||!/admin\/media\/upload/.test(api)||!/api\/media\/file/.test(api)||!/mediaObjectId/.test(api)){console.error('FAIL provider-backed media pipeline');fail=true}else console.log('PASS provider-backed media pipeline');
+if(!/Cloudflare Email Service/.test(app)||!/email\/sending\/send/.test(api)||!/replyTo/.test(api)||!/reply_to/.test(api)){console.error('FAIL Cloudflare Email Service adapter');fail=true}else console.log('PASS Cloudflare Email Service adapter');
+if(!/admin\/paypal\/test/.test(api)||!/Test Connection/.test(app)){console.error('FAIL PayPal credential test');fail=true}else console.log('PASS PayPal credential test');
+if(!/MIGRATION_020/.test(api)||!/ensureUpgrade020/.test(api)){console.error('FAIL automatic 0.2.0 migration');fail=true}else console.log('PASS automatic 0.2.0 migration');
+const mysqlSchema=await readFile(resolve(root,'database/schema.mysql.sql'),'utf8');
+const mysqlAdapter=await readFile(resolve(root,'self-host/mysql-adapter.mjs'),'utf8');
+const selfHostServer=await readFile(resolve(root,'self-host/server.mjs'),'utf8');
+if(!/CREATE TABLE IF NOT EXISTS media_objects/i.test(mysqlSchema)||!/MySQLD1Adapter/.test(mysqlAdapter)||!/LOCAL_STORAGE/.test(selfHostServer)){console.error('FAIL VPS MySQL/local-storage profile');fail=true}else console.log('PASS VPS MySQL/local-storage profile');
+
+const sqlCompat=await import(new URL('../self-host/sql-compat.mjs',import.meta.url));
+const compatSamples=[
+  `INSERT OR IGNORE INTO analytics(event_type,object_type,object_id,visitor_hash,bucket,value,created_at) VALUES(?,?,?,?,?,1,?)`,
+  `SELECT COUNT(*) c FROM password_reset_tokens WHERE admin_id=? AND created_at>=datetime('now','-15 minutes')`,
+  `SELECT * FROM content_items WHERE type='tour' AND status='published' AND sort_date>=date('now') ORDER BY sort_date ASC LIMIT 4`,
+  `INSERT INTO settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`,
+  `INSERT INTO integrations(provider,data_enc,updated_at) VALUES(?,?,?) ON CONFLICT(provider) DO UPDATE SET data_enc=excluded.data_enc,updated_at=excluded.updated_at`
+];
+try{for(const q of compatSamples)sqlCompat.assertMySQLCompatibleSQL(q);console.log('PASS MySQL SQLite-compat SQL translation')}catch(e){console.error('FAIL MySQL SQL translation',e.message);fail=true}
+try{execFileSync('bash',['-n',resolve(root,'self-host/install-ubuntu.sh')],{stdio:'pipe'});console.log('PASS Ubuntu installer shell syntax')}catch(e){console.error('FAIL Ubuntu installer shell syntax',String(e.stderr||e.message));fail=true}
 
 const pbkdf2Iterations=Number((api.match(/iterations:(\d+)/)||[])[1]||0);
 if(!pbkdf2Iterations||pbkdf2Iterations>100000){console.error('FAIL Cloudflare PBKDF2 iteration limit',pbkdf2Iterations);fail=true}else console.log('PASS Cloudflare PBKDF2 iteration limit',pbkdf2Iterations);

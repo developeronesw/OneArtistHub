@@ -129,3 +129,17 @@ Save the access token. Then edit a Digital product and set its private Dropbox p
 `/OneArtistHub/Albums/MyAlbum.zip`
 
 The customer does not receive the Dropbox access token or a permanent Dropbox URL. OneArtist Hub validates the purchase, creates a one-time 15-minute token, and streams the file through the server endpoint.
+
+## OneArtist Hub 0.2.0 media storage
+
+For managed album ZIP uploads, Cloudflare R2 is recommended. Create an R2 bucket, then add an R2 binding to the OneArtist Pages project named exactly:
+
+`MEDIA`
+
+Redeploy the Pages project, then select R2 under **Settings → Media Storage**. If `MEDIA` is not bound, OneArtist will not allow R2 to be activated.
+
+Dropbox remains supported as an alternate provider.
+
+## Cloudflare Email Service
+
+OneArtist 0.2.0 can send transactional messages through Cloudflare Email Service over its REST API. Onboard the sending domain under Cloudflare Email Service, create an API token with Email Sending permission, then enter the account ID/token under **Settings → Email & Sales Notifications**.

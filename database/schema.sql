@@ -108,3 +108,16 @@ CREATE TABLE IF NOT EXISTS order_documents (
 );
 INSERT OR IGNORE INTO order_documents(order_id,invoice_number,refunded_amount,created_at,updated_at)
 SELECT id,'OAH-'||replace(substr(created_at,1,10),'-','')||'-'||upper(substr(hex(randomblob(4)),1,8)),0,created_at,created_at FROM orders;
+
+-- OneArtist Hub 0.2.0 — provider-backed media objects
+CREATE TABLE IF NOT EXISTS media_objects (
+  id TEXT PRIMARY KEY,
+  storage_provider TEXT NOT NULL,
+  storage_key TEXT NOT NULL,
+  filename TEXT NOT NULL,
+  content_type TEXT,
+  size_bytes INTEGER NOT NULL DEFAULT 0,
+  visibility TEXT NOT NULL DEFAULT 'private',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_media_objects_visibility ON media_objects(visibility,created_at DESC);

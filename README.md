@@ -1,12 +1,22 @@
-# OneArtist Hub 0.1.3 — Commerce & Customer Accounts
+# OneArtist Hub 0.2.0 — Media & Deployment
 
 **Official admin design:** Aurora Glass Studio  
 **Public themes:** Midnight Cinema, Artist OS, Neon Editorial
 
-OneArtist Hub is a responsive artist CMS, storefront, continuous music player and serverless backend. This commerce release uses **Cloudflare Pages + Pages Functions + D1** for the recommended deployment profile. No PHP, MySQL or VPS is required for this profile.
+OneArtist Hub is a responsive artist CMS, storefront, continuous music player and portable JavaScript backend. **Cloudflare Pages + Pages Functions + D1** remains the recommended serverless profile, while 0.2.0 adds a **Node.js + MySQL/MariaDB + NGINX** self-hosted/VPS profile. PHP is not required.
 
 ## What is functional in this build
 
+- OneArtist Album Ingest: upload an Album/EP/Single ZIP containing MP3 tracks and optional artwork
+- Automatic ID3v2 metadata reading, embedded/external artwork detection, editable track titles and drag/touch track ordering
+- Finalize pipeline removes old ID3v2/ID3v1 tags, rewrites MP3 title/artist/album/track-total/year/genre tags, embeds cover artwork and records full track durations
+- Automatic customer-ready release ZIP creation plus protected storage linkage
+- Browser-generated 30/60/90-second WAV previews uploaded as public stream sources
+- Provider-backed media objects stored in D1/MySQL as metadata pointers, never as database blobs
+- Cloudflare R2 or Dropbox storage in the serverless profile; private local storage in the VPS profile
+- Cloudflare Email Service transactional-email adapter alongside Resend
+- PayPal credential connection test and direct-merchant Apps & Credentials workflow
+- Self-hosted Node.js API with MySQL/MariaDB adapter, local media storage, NGINX and systemd installer
 - Browser-based first-run setup with a one-time setup key
 - Username/email/password administrator login plus secure forgot-password email recovery
 - PBKDF2-SHA256 password hashing

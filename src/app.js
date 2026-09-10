@@ -1,6 +1,7 @@
 import React, {useEffect,useMemo,useRef,useState,useCallback} from 'react';
 import {createRoot} from 'react-dom/client';
 import './styles.css';
+import {unpackReleaseZip,makePreviewWav,buildReleaseZip,releaseZipFilename,bytesToFile} from './media-ingest.js';
 
 const h=React.createElement;
 
@@ -49,7 +50,11 @@ const ICONS={
   minimize:'M8 8H3V3m13 5h5V3M8 16H3v5m13-5h5v5',
   mail:'M3 5h18v14H3V5Zm0 1 9 7 9-7',
   key:'M14 8a5 5 0 1 0-4.7 6.7L4 20h4v-2h2v-2h2l1.3-1.3A5 5 0 0 0 14 8Z',
-  check:'m5 12 4 4L19 6'
+  check:'m5 12 4 4L19 6',
+  upload:'M12 16V4m0 0-5 5m5-5 5 5M5 20h14',
+  archive:'M4 7h16v13H4zM3 4h18v3H3zM9 11h6',
+  up:'m6 15 6-6 6 6',
+  down:'m6 9 6 6 6-6'
 };
 function Icon({name,size=20,className=''}){const path=ICONS[name]||ICONS.home;return h('svg',{className:'oah-icon '+className,width:size,height:size,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor',strokeWidth:1.8,strokeLinecap:'round',strokeLinejoin:'round','aria-hidden':'true'},h('path',{d:path}))}
 function Button({children,icon,variant='',className='',...props}){return h('button',{className:`btn ${variant} ${className}`.trim(),...props},icon&&h(Icon,{name:icon}),children)}
@@ -70,6 +75,20 @@ async function api(path,opts={}){
   const res=await fetch('/api/'+path,{credentials:'same-origin',headers:{'content-type':'application/json',...(window.__OAH_CSRF?{'x-csrf-token':window.__OAH_CSRF}:{}),...(opts.headers||{})},...opts});
   let data={};try{data=await res.json()}catch{}
   if(!res.ok)throw new Error(data.error||data.message||`Request failed (${res.status})`);return data;
+}
+
+async function uploadMediaFile(file,{visibility='private',folder='media'}={}){
+  const headers={
+    ...(window.__OAH_CSRF?{'x-csrf-token':window.__OAH_CSRF}:{}),
+    'x-file-name':file.name||'upload.bin',
+    'x-content-type':file.type||'application/octet-stream',
+    'x-visibility':visibility,
+    'x-folder':folder
+  };
+  const res=await fetch('/api/admin/media/upload',{method:'POST',credentials:'same-origin',headers,body:file});
+  let data={};try{data=await res.json()}catch{}
+  if(!res.ok)throw new Error(data.error||data.message||`Upload failed (${res.status})`);
+  return data.object;
 }
 
 function Setup({onDone}){
@@ -230,8 +249,108 @@ function Dashboard({select,create,show}){
   )
 }
 
+function AlbumImporter({onClose,onSaved,show}){
+  const [stage,setStage]=useState('pick'),[zipFile,setZipFile]=useState(null),[tracks,setTracks]=useState([]),[cover,setCover]=useState(null),[coverUrl,setCoverUrl]=useState(''),[busy,setBusy]=useState(false),[progress,setProgress]=useState('');
+  const [form,setForm]=useState({title:'',artist:'',releaseType:'Album',genre:'',year:String(new Date().getFullYear()),releaseDate:today(),description:'',price:'9.99',status:'published',featured:true,previewSeconds:30,createProduct:true});
+  useEffect(()=>()=>{if(coverUrl)URL.revokeObjectURL(coverUrl)},[coverUrl]);
+  const update=(k,v)=>setForm(f=>({...f,[k]:v}));
+  async function ingest(file){
+    if(!file)return;setBusy(true);setProgress('Reading album ZIP…');
+    try{
+      const unpacked=await unpackReleaseZip(file);
+      if(!unpacked.tracks.length)throw new Error('No MP3 files were found in this ZIP. OneArtist 0.2.0 album ingest currently manages MP3 releases.');
+      setZipFile(file);setTracks(unpacked.tracks);setCover(unpacked.cover);
+      if(coverUrl)URL.revokeObjectURL(coverUrl);setCoverUrl(unpacked.cover?URL.createObjectURL(new Blob([unpacked.cover.bytes],{type:unpacked.cover.mime})):'');
+      const first=unpacked.tracks[0];
+      setForm(f=>({...f,title:first.album||file.name.replace(/\.zip$/i,''),artist:first.artist||f.artist,genre:first.genre||f.genre,year:first.year||f.year}));
+      setStage('edit');setProgress('');
+    }catch(e){show(e.message,true)}finally{setBusy(false)}
+  }
+  async function chooseCover(file){if(!file)return;const lower=file.name.toLowerCase();if(!/\.(jpe?g|png|webp)$/.test(lower)){show('Choose a JPG, PNG or WebP cover image.',true);return}const bytes=new Uint8Array(await file.arrayBuffer()),mime=file.type|| (lower.endsWith('.png')?'image/png':lower.endsWith('.webp')?'image/webp':'image/jpeg');setCover({name:file.name,path:file.name,bytes,mime});if(coverUrl)URL.revokeObjectURL(coverUrl);setCoverUrl(URL.createObjectURL(file));}
+  function move(from,to){if(to<0||to>=tracks.length||from===to)return;setTracks(list=>{const n=[...list],x=n.splice(from,1)[0];n.splice(to,0,x);return n.map((t,i)=>({...t,trackNo:i+1}))})}
+  function drop(from,to){move(Number(from),Number(to))}
+  function updateTrack(i,key,val){setTracks(list=>list.map((t,n)=>n===i?{...t,[key]:val}:t))}
+  function removeTrack(i){setTracks(list=>list.filter((_,n)=>n!==i).map((t,n)=>({...t,trackNo:n+1})))}
+  async function finalize(){
+    if(!form.title.trim()||!form.artist.trim())return show('Release title and artist are required.',true);
+    if(!tracks.length)return show('At least one track is required.',true);
+    if(!cover)return show('Album artwork is required before finalizing.',true);
+    setBusy(true);
+    try{
+      setProgress('Checking storage provider…');const st=await api('admin/storage/status');
+      if(st.provider==='r2'&&!st.r2Bound)throw new Error('R2 is selected but the MEDIA bucket binding is missing. Configure Storage in Settings first.');
+      if(st.provider==='dropbox'&&!st.dropboxConfigured)throw new Error('Dropbox storage is selected but not configured. Configure Storage in Settings first.');
+      setProgress('Uploading album artwork…');const coverExt=cover.mime==='image/png'?'png':cover.mime==='image/webp'?'webp':'jpg';const coverObj=await uploadMediaFile(bytesToFile(cover.bytes,`${form.title}-cover.${coverExt}`,cover.mime),{visibility:'public',folder:'covers'});
+      setProgress('Writing final MP3 metadata and packaging album…');const finalBytes=buildReleaseZip(tracks,{artist:form.artist,album:form.title,year:form.year,genre:form.genre,cover});const finalName=releaseZipFilename(form.artist,form.title);const packageObj=await uploadMediaFile(bytesToFile(finalBytes,finalName,'application/zip'),{visibility:'private',folder:'releases'});
+      setProgress('Creating release record…');const rel=await api('admin/content',{method:'POST',body:JSON.stringify({type:'release',title:form.title,status:form.status,sortDate:form.releaseDate,featured:!!form.featured,data:{releaseType:form.releaseType,price:form.price,cover:coverObj.url,description:form.description,genre:form.genre,year:form.year,packageObjectId:packageObj.id,downloadFilename:finalName}})});
+      for(let i=0;i<tracks.length;i++){
+        const t=tracks[i];setProgress(`Generating preview ${i+1}/${tracks.length}: ${t.title}`);const preview=await makePreviewWav(t.bytes,{seconds:Number(form.previewSeconds)||30,start:0});const previewFile=bytesToFile(preview.bytes,`${String(i+1).padStart(2,'0')}-${t.title.replace(/[^a-z0-9_-]+/gi,'-')}-preview.wav`,'audio/wav');const previewObj=await uploadMediaFile(previewFile,{visibility:'public',folder:'previews'});
+        await api('admin/content',{method:'POST',body:JSON.stringify({type:'track',title:t.title,status:form.status,sortDate:form.releaseDate,featured:false,data:{releaseId:rel.id,trackNo:i+1,audio:previewObj.url,cover:coverObj.url,duration:Math.round(preview.duration),price:'',explicit:!!t.explicit}})});
+      }
+      if(form.createProduct){setProgress('Creating digital store product…');await api('admin/content',{method:'POST',body:JSON.stringify({type:'product',title:form.title,status:form.status,sortDate:form.releaseDate,featured:!!form.featured,data:{price:String(form.price||'0'),kind:'digital',inventory:'',image:coverObj.url,description:form.description||`${form.releaseType} download by ${form.artist}`,sku:'',variants:[],mediaObjectId:packageObj.id,downloadFilename:finalName,releaseId:rel.id}})});}
+      setProgress('Release finalized successfully.');show(`${form.title} finalized, tagged, packaged and published.`);setTimeout(()=>onSaved(),500);
+    }catch(e){show(e.message,true);setProgress('')}finally{setBusy(false)}
+  }
+  const pick=h('div',{className:'album-ingest-pick'},h('div',{className:'album-drop',onDragOver:e=>e.preventDefault(),onDrop:e=>{e.preventDefault();ingest(e.dataTransfer.files?.[0])}},h(Icon,{name:'archive',size:44}),h('h2',null,'Import Album / EP / Single ZIP'),h('p',{className:'muted'},'Drop a ZIP containing MP3 tracks and optional cover artwork. Existing ID3 tags are read automatically.'),h('label',{className:'btn primary file-button'},h(Icon,{name:'upload'}),' Choose Album ZIP',h('input',{type:'file',accept:'.zip,application/zip',hidden:true,onChange:e=>ingest(e.target.files?.[0])})),busy&&h('p',{className:'small'},progress)));
+  const coverPanel=h('div',{className:'album-cover-editor'},
+    coverUrl?h('img',{src:coverUrl,alt:'Release cover'}):h('div',{className:'cover-placeholder'},h(Icon,{name:'image',size:42}),'No artwork'),
+    h('label',{className:'btn compact file-button'},h(Icon,{name:'image'}),' Change Artwork',h('input',{type:'file',accept:'image/jpeg,image/png,image/webp',hidden:true,onChange:e=>chooseCover(e.target.files?.[0])}))
+  );
+  const releaseFields=h('div',{className:'stack'},
+    h('div',{className:'grid2'},
+      h(Field,{label:'Release title'},h(Input,{required:true,value:form.title,onChange:e=>update('title',e.target.value)})),
+      h(Field,{label:'Artist'},h(Input,{required:true,value:form.artist,onChange:e=>update('artist',e.target.value)})),
+      h(Field,{label:'Release type'},h(Select,{value:form.releaseType,onChange:e=>update('releaseType',e.target.value)},['Album','EP','Single','Mixtape','Compilation'].map(v=>h('option',{key:v,value:v},v)))),
+      h(Field,{label:'Genre'},h(Input,{value:form.genre,onChange:e=>update('genre',e.target.value)})),
+      h(Field,{label:'Release date'},h(Input,{type:'date',value:form.releaseDate,onChange:e=>update('releaseDate',e.target.value)})),
+      h(Field,{label:'Year written to MP3'},h(Input,{value:form.year,onChange:e=>update('year',e.target.value)})),
+      h(Field,{label:'Store price'},h(Input,{type:'number',min:0,step:'.01',value:form.price,onChange:e=>update('price',e.target.value)})),
+      h(Field,{label:'Preview length'},h(Select,{value:form.previewSeconds,onChange:e=>update('previewSeconds',Number(e.target.value))},[30,60,90].map(v=>h('option',{key:v,value:v},`${v} seconds`)))),
+      h(Field,{label:'Publish status'},h(Select,{value:form.status,onChange:e=>update('status',e.target.value)},h('option',{value:'published'},'Published'),h('option',{value:'draft'},'Draft')))
+    ),
+    h(Field,{label:'Description'},h(Textarea,{value:form.description,onChange:e=>update('description',e.target.value)})),
+    h('div',{className:'row wrap'},
+      h('label',{className:'row small'},h('input',{type:'checkbox',checked:form.featured,onChange:e=>update('featured',e.target.checked)}),'Feature release'),
+      h('label',{className:'row small'},h('input',{type:'checkbox',checked:form.createProduct,onChange:e=>update('createProduct',e.target.checked)}),'Create digital store product')
+    )
+  );
+  const trackList=h('div',{className:'track-sort-list'},tracks.map((t,i)=>h('div',{
+    className:'track-sort-row',key:t.id,draggable:true,
+    onDragStart:e=>e.dataTransfer.setData('text/plain',String(i)),
+    onDragOver:e=>e.preventDefault(),
+    onDrop:e=>{e.preventDefault();drop(e.dataTransfer.getData('text/plain'),i)}
+  },
+    h('div',{className:'track-drag',title:'Drag to reorder'},h(Icon,{name:'menu'})),
+    h('strong',{className:'track-number'},String(i+1).padStart(2,'0')),
+    h(Input,{value:t.title,onChange:e=>updateTrack(i,'title',e.target.value),'aria-label':`Track ${i+1} title`}),
+    h('div',{className:'row'},
+      h(IconButton,{type:'button',icon:'up',label:'Move track up',disabled:i===0,onClick:()=>move(i,i-1)}),
+      h(IconButton,{type:'button',icon:'down',label:'Move track down',disabled:i===tracks.length-1,onClick:()=>move(i,i+1)}),
+      h(IconButton,{type:'button',icon:'trash',label:'Remove track',onClick:()=>removeTrack(i)})
+    )
+  )));
+  const editor=h('div',{className:'album-ingest-editor'},
+    h('div',{className:'album-ingest-grid'},coverPanel,releaseFields),
+    h('div',{className:'track-order-head'},
+      h('div',null,h('h3',null,'Track Order'),h('p',{className:'small muted'},'Drag tracks on desktop or use the arrow controls on touch devices. Finalized MP3 tags use this exact order.')),
+      h('span',{className:'pill'},`${tracks.length} track${tracks.length===1?'':'s'}`)
+    ),
+    trackList,
+    h('div',{className:'album-finalize-note'},h(Icon,{name:'archive'}),h('div',null,
+      h('strong',null,'Finalize creates the customer-ready master package'),
+      h('p',{className:'small muted'},'OneArtist rewrites MP3 title, artist, album, track number, year, genre and embedded cover art, builds the ZIP, stores it privately, generates public preview audio, and links the store product to the protected package.')
+    )),
+    progress&&h('div',{className:'ingest-progress'},h('span',{className:'spinner'}),progress),
+    h('div',{className:'row between wrap'},
+      h(Button,{type:'button',onClick:()=>{setStage('pick');setTracks([]);setZipFile(null)}},'Choose Different ZIP'),
+      h(Button,{type:'button',variant:'primary',icon:'archive',disabled:busy,onClick:finalize},busy?'Processing…':'Finalize & Publish Release')
+    )
+  );
+  return h('div',{className:'modal-backdrop album-import-backdrop'},h('div',{className:'modal album-import-modal'},h('div',{className:'modal-head'},h('div',null,h('strong',null,'OneArtist Album Ingest'),h('div',{className:'small muted'},zipFile?zipFile.name:'ZIP → metadata → previews → protected package')),h(IconButton,{icon:'close',label:'Close importer',disabled:busy,onClick:onClose})),h('div',{className:'modal-body'},stage==='pick'?pick:editor)));
+}
+
 function ContentManager({type,search,show,createRequest,onCreateHandled}){
-  const meta=TYPE_META[type], [items,setItems]=useState([]),[editing,setEditing]=useState(null),[loading,setLoading]=useState(true),[selected,setSelected]=useState(new Set());
+  const meta=TYPE_META[type], [items,setItems]=useState([]),[editing,setEditing]=useState(null),[importing,setImporting]=useState(false),[loading,setLoading]=useState(true),[selected,setSelected]=useState(new Set());
   const load=useCallback(()=>{setLoading(true);return api('admin/content?type='+type).then(d=>setItems(d.items||[])).catch(e=>show(e.message,true)).finally(()=>setLoading(false))},[type,show]);
   useEffect(()=>{load()},[load]);
   useEffect(()=>{if(createRequest?.type===type){setEditing(blankFor(type));onCreateHandled?.()}},[createRequest?.token,type]);
@@ -242,7 +361,8 @@ function ContentManager({type,search,show,createRequest,onCreateHandled}){
   const togglePick=id=>setSelected(s=>{const n=new Set(s);n.has(id)?n.delete(id):n.add(id);return n});
   const singular=meta.singular;
   return h(React.Fragment,null,
-    h(PageHead,{title:meta.label,subtitle:`Create, edit, publish and delete ${meta.label.toLowerCase()} without touching code.`,actions:h(React.Fragment,null,selected.size>0&&h(Button,{icon:'trash',onClick:bulkDelete},`Delete ${selected.size}`),h(Button,{variant:'primary',icon:'plus',onClick:()=>setEditing(blankFor(type))},'Add '+singular))}),
+    h(PageHead,{title:meta.label,subtitle:`Create, edit, publish and delete ${meta.label.toLowerCase()} without touching code.`,actions:h(React.Fragment,null,selected.size>0&&h(Button,{icon:'trash',onClick:bulkDelete},`Delete ${selected.size}`),type==='release'&&h(Button,{icon:'archive',onClick:()=>setImporting(true)},'Import Album ZIP'),h(Button,{variant:'primary',icon:'plus',onClick:()=>setEditing(blankFor(type))},'Add '+singular))}),
+    importing&&h(AlbumImporter,{show,onClose:()=>setImporting(false),onSaved:async()=>{setImporting(false);await load();}}),
     editing&&h(ContentEditor,{item:editing,type,onClose:()=>setEditing(null),onSaved:async()=>{setEditing(null);await load();show('Saved successfully.')}}),
     h('div',{className:'card table-wrap'},loading?h('div',{className:'empty'},'Loading…'):filtered.length?h('table',{className:'table crud-table'},
       h('thead',null,h('tr',null,h('th',null,''),h('th',null,'Title'),h('th',null,'Status'),h('th',null,'Date'),h('th',null,'Homepage'),h('th',null,'Actions'))),
@@ -325,7 +445,7 @@ function TypeFields({type,data,setData,releases=[],onFetchYouTube,youtubeBusy=fa
   if(type==='product')return h(React.Fragment,null,
     h('div',{className:'grid3'},h(Field,{label:'Base price'},h(Input,{required:true,type:'number',min:0,step:'.01',value:data.price??'',onChange:e=>setData('price',e.target.value)})),h(Field,{label:'Product type'},h(Select,{value:data.kind||'physical',onChange:e=>setData('kind',e.target.value)},h('option',{value:'physical'},'Physical merch'),h('option',{value:'digital'},'Digital download'))),h(Field,{label:'Base inventory'},h(Input,{type:'number',min:0,value:data.inventory??'',disabled:data.kind==='digital',onChange:e=>setData('inventory',e.target.value),placeholder:'Used when no variants'}))),
     h('div',{className:'grid2'},h(Field,{label:'Product image URL'},h(Input,{value:data.image||'',onChange:e=>setData('image',e.target.value)})),h(Field,{label:'Base SKU'},h(Input,{value:data.sku||'',onChange:e=>setData('sku',e.target.value)}))),
-    data.kind==='digital'&&h(Field,{label:'Dropbox file path (private)'},h(Input,{value:data.dropboxPath||'',onChange:e=>setData('dropboxPath',e.target.value),placeholder:'/OneArtist/downloads/album.zip'})),
+    data.kind==='digital'&&h(React.Fragment,null,data.mediaObjectId&&h('div',{className:'managed-file-badge'},h(Icon,{name:'archive'}),h('div',null,h('strong',null,'Managed OneArtist package'),h('div',{className:'small muted'},data.downloadFilename||data.mediaObjectId))),h(Field,{label:'Legacy Dropbox path (optional fallback)'},h(Input,{value:data.dropboxPath||'',onChange:e=>setData('dropboxPath',e.target.value),placeholder:'/OneArtist/downloads/album.zip'}))),
     data.kind==='physical'&&h(VariantEditor,{value:data.variants,onChange:v=>setData('variants',v)}),
     h(Field,{label:'Description'},h(Textarea,{value:data.description||'',onChange:e=>setData('description',e.target.value)}))
   );
@@ -446,25 +566,61 @@ function DownloadsAdmin({show}){
 }
 
 function Settings({show,focus}){
-  const [settings,setSettings]=useState(null),[ints,setInts]=useState([]),[paypal,setPaypal]=useState({clientId:'',clientSecret:'',environment:'sandbox',webhookId:''}),[dropbox,setDropbox]=useState({accessToken:''}),[emailCfg,setEmailCfg]=useState({service:'resend',apiKey:'',fromName:'',fromEmail:'',replyTo:'',configured:false}),[prefs,setPrefs]=useState(null),[testTo,setTestTo]=useState(''),[webhooks,setWebhooks]=useState([]);
-  const load=useCallback(()=>Promise.all([api('admin/settings'),api('admin/integrations'),api('admin/email/config'),api('admin/notification-preferences'),api('admin/paypal/config'),api('admin/webhooks')]).then(([s,i,e,n,p,w])=>{setSettings(s.settings);setInts(i.integrations||[]);setEmailCfg(x=>({...x,...e,apiKey:''}));setPrefs(n.preferences);setTestTo(e.fromEmail||'');setPaypal(x=>({...x,clientId:p.clientId||'',environment:p.environment||'sandbox',webhookId:p.webhookId||'',clientSecret:''}));setWebhooks(w.events||[])}).catch(e=>show(e.message,true)),[show]);
+  const [settings,setSettings]=useState(null),[ints,setInts]=useState([]),[paypal,setPaypal]=useState({clientId:'',clientSecret:'',environment:'sandbox',webhookId:''}),[dropbox,setDropbox]=useState({accessToken:''}),[emailCfg,setEmailCfg]=useState({service:'resend',apiKey:'',apiToken:'',accountId:'',fromName:'',fromEmail:'',replyTo:'',configured:false}),[prefs,setPrefs]=useState(null),[testTo,setTestTo]=useState(''),[webhooks,setWebhooks]=useState([]),[storage,setStorage]=useState({provider:'dropbox',r2Bound:false,dropboxConfigured:false,localAvailable:false}),[busy,setBusy]=useState('');
+  const load=useCallback(()=>Promise.all([api('admin/settings'),api('admin/integrations'),api('admin/email/config'),api('admin/notification-preferences'),api('admin/paypal/config'),api('admin/webhooks'),api('admin/storage/status')]).then(([s,i,e,n,p,w,st])=>{setSettings(s.settings);setInts(i.integrations||[]);setEmailCfg(x=>({...x,...e,apiKey:'',apiToken:''}));setPrefs(n.preferences);setTestTo(e.fromEmail||'');setPaypal(x=>({...x,clientId:p.clientId||'',environment:p.environment||'sandbox',webhookId:p.webhookId||'',clientSecret:''}));setWebhooks(w.events||[]);setStorage(st)}).catch(e=>show(e.message,true)),[show]);
   useEffect(()=>{load()},[load]); if(!settings||!prefs)return h('div',{className:'empty'},'Loading settings…');
   const artist=settings.artist||{},site=settings.site||{},commerce=settings.commerce||{};const update=(group,key,val)=>setSettings(s=>({...s,[group]:{...(s[group]||{}),[key]:val}}));
   async function save(){try{const d=await api('admin/settings',{method:'PUT',body:JSON.stringify({settings:{artist:settings.artist,site:settings.site,commerce:settings.commerce,socials:settings.socials}})});setSettings(d.settings);show('Settings saved.')}catch(e){show(e.message,true)}}
-  async function saveInt(provider,obj){try{await api('admin/integrations',{method:'POST',body:JSON.stringify({provider,...obj})});show(provider==='email'?'Email provider connected securely.':provider+' connected securely.');await load()}catch(e){show(e.message,true)}}
+  async function saveInt(provider,obj){setBusy(provider);try{await api('admin/integrations',{method:'POST',body:JSON.stringify({provider,...obj})});show(provider==='email'?'Email provider connected securely.':provider+' connected securely.');await load()}catch(e){show(e.message,true)}finally{setBusy('')}}
   async function savePrefs(){try{const d=await api('admin/notification-preferences',{method:'PUT',body:JSON.stringify(prefs)});setPrefs(d.preferences);show('Notification preferences saved.')}catch(e){show(e.message,true)}}
-  async function testEmail(){try{await api('admin/email/test',{method:'POST',body:JSON.stringify({to:testTo})});show('Test email sent.')}catch(e){show(e.message,true)}}
+  async function testEmail(){setBusy('email-test');try{await api('admin/email/test',{method:'POST',body:JSON.stringify({to:testTo})});show('Test email sent.')}catch(e){show(e.message,true)}finally{setBusy('')}}
+  async function testPayPal(){setBusy('paypal-test');try{const d=await api('admin/paypal/test',{method:'POST'});show(`PayPal ${d.environment} credentials authenticated successfully.`)}catch(e){show(e.message,true)}finally{setBusy('')}}
+  async function saveStorage(provider){setBusy('storage');try{const d=await api('admin/storage/config',{method:'PUT',body:JSON.stringify({provider})});setStorage(x=>({...x,provider:d.provider}));show(`${d.provider.toUpperCase()} is now the active media storage provider.`)}catch(e){show(e.message,true)}finally{setBusy('')}}
   const prefToggle=(key,label)=>h('label',{className:'notification-pref'},h('input',{type:'checkbox',checked:!!prefs[key],onChange:e=>setPrefs({...prefs,[key]:e.target.checked})}),h('span',null,label));
-  return h(React.Fragment,null,h(PageHead,{title:focus==='homepage'?'Homepage & Artist':'Settings',subtitle:'Brand, hero, commerce, email and secure integrations.',actions:h(Button,{variant:'primary',icon:'save',onClick:save},'Save Settings')}),h('div',{className:'stack'},
-    h('section',{className:'card form-card'},h('h3',null,'Artist Profile'),h('div',{className:'grid2'},h(Field,{label:'Artist / stage name'},h(Input,{value:artist.name||'',onChange:e=>update('artist','name',e.target.value)})),h(Field,{label:'Genre'},h(Input,{value:artist.genre||'',onChange:e=>update('artist','genre',e.target.value)})),h(Field,{label:'Location'},h(Input,{value:artist.location||'',onChange:e=>update('artist','location',e.target.value)})),h(Field,{label:'Profile image URL'},h(Input,{value:artist.profileImage||'',onChange:e=>update('artist','profileImage',e.target.value)}))),h(Field,{label:'Biography'},h(Textarea,{value:artist.bio||'',onChange:e=>update('artist','bio',e.target.value)}))),
-    h('section',{className:'card form-card'},h('h3',null,'Homepage Hero'),h('div',{className:'grid2'},h(Field,{label:'Site title'},h(Input,{value:site.title||'',onChange:e=>update('site','title',e.target.value)})),h(Field,{label:'Artist logo SVG URL'},h(Input,{value:site.logoUrl||'',onChange:e=>update('site','logoUrl',e.target.value),placeholder:'/images/artist-logo.svg'})),h(Field,{label:'Accent color'},h(Input,{type:'color',value:site.accent||'#b45cff',onChange:e=>update('site','accent',e.target.value)})),h(Field,{label:'Hero headline'},h(Input,{value:site.heroTitle||'',onChange:e=>update('site','heroTitle',e.target.value)})),h(Field,{label:'Hero image URL'},h(Input,{value:site.heroImage||'',onChange:e=>update('site','heroImage',e.target.value)}))),h(Field,{label:'Hero subtitle'},h(Textarea,{value:site.heroSubtitle||'',onChange:e=>update('site','heroSubtitle',e.target.value)}))),
-    h('section',{className:'card form-card'},h('h3',null,'Commerce'),h('div',{className:'grid3'},h(Field,{label:'Currency'},h(Input,{value:commerce.currency||'USD',onChange:e=>update('commerce','currency',e.target.value.toUpperCase().slice(0,3))})),h(Field,{label:'Flat physical shipping'},h(Input,{type:'number',step:'.01',min:0,value:commerce.flatShipping??0,onChange:e=>update('commerce','flatShipping',Number(e.target.value))})),h(Field,{label:'Digital download limit'},h(Input,{type:'number',min:1,max:50,value:commerce.downloadsMax??5,onChange:e=>update('commerce','downloadsMax',Number(e.target.value))})))),
-    h('section',{className:'card form-card'},h('div',{className:'row between'},h('h3',null,'PayPal'),ints.some(x=>x.provider==='paypal')&&h('span',{className:'pill success'},'Configured')),h('p',{className:'small muted'},'The Client Secret is encrypted before storage and never returned.'),h('div',{className:'grid2'},h(Field,{label:'PayPal Client ID'},h(Input,{value:paypal.clientId,onChange:e=>setPaypal({...paypal,clientId:e.target.value})})),h(Field,{label:'Environment'},h(Select,{value:paypal.environment,onChange:e=>setPaypal({...paypal,environment:e.target.value})},h('option',{value:'sandbox'},'Sandbox / Testing'),h('option',{value:'live'},'Live')))),h('div',{className:'grid2'},h(Field,{label:'PayPal Client Secret'},h(Input,{type:'password',value:paypal.clientSecret,onChange:e=>setPaypal({...paypal,clientSecret:e.target.value}),placeholder:ints.some(x=>x.provider==='paypal')?'Leave blank to keep current secret':'Never stored in GitHub'})),h(Field,{label:'PayPal Webhook ID'},h(Input,{value:paypal.webhookId||'',onChange:e=>setPaypal({...paypal,webhookId:e.target.value}),placeholder:'From PayPal Developer Dashboard'}))),h(Field,{label:'Webhook listener URL'},h('div',{className:'copy-field'},h(Input,{readOnly:true,value:location.origin+'/api/paypal/webhook'}),h(Button,{type:'button',className:'compact',icon:'link',onClick:()=>navigator.clipboard?.writeText(location.origin+'/api/paypal/webhook')},'Copy'))),h('p',{className:'small muted'},'Subscribe this URL to CHECKOUT.ORDER.APPROVED, PAYMENT.CAPTURE.PENDING, PAYMENT.CAPTURE.COMPLETED, PAYMENT.CAPTURE.DENIED, PAYMENT.CAPTURE.REFUNDED and CHECKOUT.PAYMENT-APPROVAL.REVERSED.'),h(Button,{icon:'lock',onClick:()=>saveInt('paypal',paypal)},'Save PayPal Securely')),
-    h('section',{className:'card form-card'},h('div',{className:'row between wrap'},h('div',null,h('h3',null,'PayPal Webhook Health'),h('p',{className:'small muted'},paypal.webhookId?'Signed server-to-server events are enabled.':'Add the PayPal Webhook ID above before using Live checkout.')),h(Button,{className:'compact',icon:'repeat',onClick:load},'Refresh')),webhooks.length?h('div',{className:'webhook-events'},webhooks.slice(0,6).map(w=>h('div',{className:'webhook-row',key:w.event_id},h('span',{className:'webhook-state '+w.status},w.status),h('div',null,h('strong',null,w.event_type),h('div',{className:'small muted'},new Date(w.created_at).toLocaleString(),w.error?' · '+w.error:''))))):h('div',{className:'small muted'},'No verified webhook events received yet.')),
-    h('section',{className:'card form-card'},h('div',{className:'row between'},h('h3',null,'Dropbox Digital Delivery'),ints.some(x=>x.provider==='dropbox')&&h('span',{className:'pill success'},'Configured')),h(Field,{label:'Dropbox access token'},h(Input,{type:'password',value:dropbox.accessToken,onChange:e=>setDropbox({accessToken:e.target.value}),placeholder:'Encrypted in D1'})),h(Button,{icon:'lock',onClick:()=>saveInt('dropbox',dropbox)},'Save Dropbox Securely')),
-    h('section',{className:'card form-card email-settings'},h('div',{className:'row between wrap'},h('div',null,h('h3',null,'Email & Sales Notifications'),h('p',{className:'small muted'},'Resend powers transactional receipts, account links and commerce alerts. The API key is AES-GCM encrypted in D1.')),emailCfg.configured&&h('span',{className:'pill success'},'Email Ready')),h('div',{className:'grid2'},h(Field,{label:'Provider'},h(Select,{value:'resend',disabled:true},h('option',{value:'resend'},'Resend'))),h(Field,{label:'From name'},h(Input,{value:emailCfg.fromName||'',onChange:e=>setEmailCfg({...emailCfg,fromName:e.target.value}),placeholder:'Artist Store'})),h(Field,{label:'From email'},h(Input,{type:'email',value:emailCfg.fromEmail||'',onChange:e=>setEmailCfg({...emailCfg,fromEmail:e.target.value}),placeholder:'sales@yourdomain.com'})),h(Field,{label:'Reply-to email'},h(Input,{type:'email',value:emailCfg.replyTo||'',onChange:e=>setEmailCfg({...emailCfg,replyTo:e.target.value}),placeholder:'artist@yourdomain.com'}))),h(Field,{label:'Resend API key'},h(Input,{type:'password',value:emailCfg.apiKey||'',onChange:e=>setEmailCfg({...emailCfg,apiKey:e.target.value}),placeholder:emailCfg.configured?'Enter a new key only when replacing configuration':'re_…'})),h('div',{className:'row wrap'},h(Button,{icon:'lock',onClick:()=>saveInt('email',emailCfg)},'Save Email Securely'),h(Field,{label:'Test recipient'},h(Input,{type:'email',value:testTo,onChange:e=>setTestTo(e.target.value),placeholder:'you@example.com'})),h(Button,{icon:'mail',onClick:testEmail,disabled:!emailCfg.configured},'Send Test Email')),
-      h('div',{className:'notification-prefs'},prefToggle('new_order','Email artist for new orders'),prefToggle('digital_sale','Digital sale alerts'),prefToggle('physical_sale','Physical merch sale alerts'),prefToggle('shipping_updates','Customer shipping/tracking emails'),prefToggle('security_alerts','Security/account emails'),prefToggle('low_inventory','Low inventory alerts'),h(Field,{label:'Low inventory threshold'},h(Input,{type:'number',min:1,max:100,value:prefs.low_inventory_threshold||5,onChange:e=>setPrefs({...prefs,low_inventory_threshold:Number(e.target.value)||5})}))),h(Button,{icon:'save',onClick:savePrefs},'Save Notification Preferences'))
-  ))
+  const emailReady=emailCfg.configured;
+  return h(React.Fragment,null,
+    h(PageHead,{title:focus==='homepage'?'Homepage & Artist':'Settings',subtitle:'Brand, hero, commerce, storage, email and secure integrations.',actions:h(Button,{variant:'primary',icon:'save',onClick:save},'Save Settings')}),
+    h('div',{className:'stack'},
+      h('section',{className:'card form-card'},h('h3',null,'Artist Profile'),h('div',{className:'grid2'},h(Field,{label:'Artist / stage name'},h(Input,{value:artist.name||'',onChange:e=>update('artist','name',e.target.value)})),h(Field,{label:'Genre'},h(Input,{value:artist.genre||'',onChange:e=>update('artist','genre',e.target.value)})),h(Field,{label:'Location'},h(Input,{value:artist.location||'',onChange:e=>update('artist','location',e.target.value)})),h(Field,{label:'Profile image URL'},h(Input,{value:artist.profileImage||'',onChange:e=>update('artist','profileImage',e.target.value)}))),h(Field,{label:'Biography'},h(Textarea,{value:artist.bio||'',onChange:e=>update('artist','bio',e.target.value)}))),
+      h('section',{className:'card form-card'},h('h3',null,'Homepage Hero'),h('div',{className:'grid2'},h(Field,{label:'Site title'},h(Input,{value:site.title||'',onChange:e=>update('site','title',e.target.value)})),h(Field,{label:'Artist logo SVG URL'},h(Input,{value:site.logoUrl||'',onChange:e=>update('site','logoUrl',e.target.value),placeholder:'/images/artist-logo.svg'})),h(Field,{label:'Accent color'},h(Input,{type:'color',value:site.accent||'#b45cff',onChange:e=>update('site','accent',e.target.value)})),h(Field,{label:'Hero headline'},h(Input,{value:site.heroTitle||'',onChange:e=>update('site','heroTitle',e.target.value)})),h(Field,{label:'Hero image URL'},h(Input,{value:site.heroImage||'',onChange:e=>update('site','heroImage',e.target.value)}))),h(Field,{label:'Hero subtitle'},h(Textarea,{value:site.heroSubtitle||'',onChange:e=>update('site','heroSubtitle',e.target.value)}))),
+      h('section',{className:'card form-card'},h('h3',null,'Commerce'),h('div',{className:'grid3'},h(Field,{label:'Currency'},h(Input,{value:commerce.currency||'USD',onChange:e=>update('commerce','currency',e.target.value.toUpperCase().slice(0,3))})),h(Field,{label:'Flat physical shipping'},h(Input,{type:'number',step:'.01',min:0,value:commerce.flatShipping??0,onChange:e=>update('commerce','flatShipping',Number(e.target.value))})),h(Field,{label:'Digital download limit'},h(Input,{type:'number',min:1,max:50,value:commerce.downloadsMax??5,onChange:e=>update('commerce','downloadsMax',Number(e.target.value))})))),
+      h('section',{className:'card form-card'},
+        h('div',{className:'row between wrap'},h('div',null,h('h3',null,'Media Storage'),h('p',{className:'small muted'},'Album artwork, preview audio and protected release ZIPs are stored outside the database.')),h('span',{className:'pill success'},(storage.provider||'not configured').toUpperCase())),
+        h('div',{className:'provider-grid'},
+          h('button',{type:'button',className:'provider-card '+(storage.provider==='r2'?'active':''),disabled:!storage.r2Bound||busy==='storage',onClick:()=>saveStorage('r2')},h(Icon,{name:'archive'}),h('strong',null,'Cloudflare R2'),h('span',null,storage.r2Bound?'Bucket binding MEDIA detected':'Add an R2 bucket binding named MEDIA')),
+          h('button',{type:'button',className:'provider-card '+(storage.provider==='dropbox'?'active':''),disabled:!storage.dropboxConfigured||busy==='storage',onClick:()=>saveStorage('dropbox')},h(Icon,{name:'download'}),h('strong',null,'Dropbox'),h('span',null,storage.dropboxConfigured?'Encrypted token configured':'Configure Dropbox below')),
+          storage.localAvailable&&h('button',{type:'button',className:'provider-card '+(storage.provider==='local'?'active':''),disabled:busy==='storage',onClick:()=>saveStorage('local')},h(Icon,{name:'archive'}),h('strong',null,'VPS Local Storage'),h('span',null,'Private server media directory'))
+        ),
+        h('p',{className:'small muted'},'The Album ZIP importer uses whichever provider is active here. Public previews are served through OneArtist; paid packages remain protected behind entitlement checks.')
+      ),
+      h('section',{className:'card form-card'},
+        h('div',{className:'row between'},h('h3',null,'PayPal Direct Merchant API'),ints.some(x=>x.provider==='paypal')&&h('span',{className:'pill success'},'Configured')),
+        h('p',{className:'small muted'},'Use the Client ID and Client Secret from your PayPal Developer Dashboard → Apps & Credentials. The secret is encrypted before storage and never returned to the browser.'),
+        h('div',{className:'grid2'},h(Field,{label:'PayPal Client ID'},h(Input,{value:paypal.clientId,onChange:e=>setPaypal({...paypal,clientId:e.target.value})})),h(Field,{label:'Environment'},h(Select,{value:paypal.environment,onChange:e=>setPaypal({...paypal,environment:e.target.value})},h('option',{value:'sandbox'},'Sandbox / Testing'),h('option',{value:'live'},'Live')))),
+        h('div',{className:'grid2'},h(Field,{label:'PayPal Client Secret'},h(Input,{type:'password',value:paypal.clientSecret,onChange:e=>setPaypal({...paypal,clientSecret:e.target.value}),placeholder:ints.some(x=>x.provider==='paypal')?'Leave blank to keep current secret':'Never stored in GitHub'})),h(Field,{label:'PayPal Webhook ID'},h(Input,{value:paypal.webhookId||'',onChange:e=>setPaypal({...paypal,webhookId:e.target.value}),placeholder:'From PayPal Developer Dashboard'}))),
+        h(Field,{label:'Webhook listener URL'},h('div',{className:'copy-field'},h(Input,{readOnly:true,value:location.origin+'/api/paypal/webhook'}),h(Button,{type:'button',className:'compact',icon:'link',onClick:()=>navigator.clipboard?.writeText(location.origin+'/api/paypal/webhook')},'Copy'))),
+        h('p',{className:'small muted'},'Seller-login onboarding can be added through PayPal platform APIs later; direct merchant credentials remain supported so OneArtist never depends on platform-partner approval.'),
+        h('div',{className:'row wrap'},h(Button,{icon:'lock',disabled:busy==='paypal',onClick:()=>saveInt('paypal',paypal)},busy==='paypal'?'Saving…':'Save PayPal Securely'),h(Button,{icon:'check',disabled:busy==='paypal-test'||!ints.some(x=>x.provider==='paypal'),onClick:testPayPal},busy==='paypal-test'?'Testing…':'Test Connection'))
+      ),
+      h('section',{className:'card form-card'},h('div',{className:'row between wrap'},h('div',null,h('h3',null,'PayPal Webhook Health'),h('p',{className:'small muted'},paypal.webhookId?'Signed server-to-server events are enabled.':'Add the PayPal Webhook ID above before using Live checkout.')),h(Button,{className:'compact',icon:'repeat',onClick:load},'Refresh')),webhooks.length?h('div',{className:'webhook-events'},webhooks.slice(0,6).map(w=>h('div',{className:'webhook-row',key:w.event_id},h('span',{className:'webhook-state '+w.status},w.status),h('div',null,h('strong',null,w.event_type),h('div',{className:'small muted'},new Date(w.created_at).toLocaleString(),w.error?' · '+w.error:''))))):h('div',{className:'small muted'},'No verified webhook events received yet.')),
+      h('section',{className:'card form-card'},h('div',{className:'row between'},h('h3',null,'Dropbox Storage'),ints.some(x=>x.provider==='dropbox')&&h('span',{className:'pill success'},'Configured')),h('p',{className:'small muted'},'Optional alternative to R2. OneArtist stores a protected storage key instead of exposing a permanent Dropbox URL.'),h(Field,{label:'Dropbox access token'},h(Input,{type:'password',value:dropbox.accessToken,onChange:e=>setDropbox({accessToken:e.target.value}),placeholder:'Encrypted in D1'})),h(Button,{icon:'lock',disabled:busy==='dropbox',onClick:()=>saveInt('dropbox',dropbox)},busy==='dropbox'?'Saving…':'Save Dropbox Securely')),
+      h('section',{className:'card form-card email-settings'},
+        h('div',{className:'row between wrap'},h('div',null,h('h3',null,'Email & Sales Notifications'),h('p',{className:'small muted'},'Use Resend on the free/serverless path, or Cloudflare Email Service when your account/domain is enabled for outbound sending. Credentials are encrypted in D1.')),emailReady&&h('span',{className:'pill success'},'Email Ready')),
+        h('div',{className:'grid2'},
+          h(Field,{label:'Provider'},h(Select,{value:emailCfg.service||'resend',onChange:e=>setEmailCfg({...emailCfg,service:e.target.value,configured:false})},h('option',{value:'resend'},'Resend'),h('option',{value:'cloudflare'},'Cloudflare Email Service'))),
+          h(Field,{label:'From name'},h(Input,{value:emailCfg.fromName||'',onChange:e=>setEmailCfg({...emailCfg,fromName:e.target.value}),placeholder:'Artist Store'})),
+          h(Field,{label:'From email'},h(Input,{type:'email',value:emailCfg.fromEmail||'',onChange:e=>setEmailCfg({...emailCfg,fromEmail:e.target.value}),placeholder:'sales@yourdomain.com'})),
+          h(Field,{label:'Reply-to email'},h(Input,{type:'email',value:emailCfg.replyTo||'',onChange:e=>setEmailCfg({...emailCfg,replyTo:e.target.value}),placeholder:'artist@yourdomain.com'}))
+        ),
+        emailCfg.service==='cloudflare'?
+          h('div',{className:'grid2'},h(Field,{label:'Cloudflare Account ID'},h(Input,{value:emailCfg.accountId||'',onChange:e=>setEmailCfg({...emailCfg,accountId:e.target.value}),placeholder:'Cloudflare account ID'})),h(Field,{label:'Cloudflare Email API token'},h(Input,{type:'password',value:emailCfg.apiToken||'',onChange:e=>setEmailCfg({...emailCfg,apiToken:e.target.value}),placeholder:emailReady?'Enter only to replace current token':'Encrypted secret'}))):
+          h(Field,{label:'Resend API key'},h(Input,{type:'password',value:emailCfg.apiKey||'',onChange:e=>setEmailCfg({...emailCfg,apiKey:e.target.value}),placeholder:emailReady?'Enter only to replace current key':'re_…'})),
+        emailCfg.service==='cloudflare'&&h('div',{className:'provider-note'},h(Icon,{name:'mail'}),h('div',null,h('strong',null,'Cloudflare sending note'),h('p',{className:'small muted'},'Your sending domain must use Cloudflare DNS. Sending to arbitrary customer addresses currently requires Workers Paid; verified destination addresses can be used for free testing.'))),
+        h('div',{className:'row wrap'},h(Button,{icon:'lock',disabled:busy==='email',onClick:()=>saveInt('email',emailCfg)},busy==='email'?'Saving…':'Save Email Securely'),h(Field,{label:'Test recipient'},h(Input,{type:'email',value:testTo,onChange:e=>setTestTo(e.target.value),placeholder:'you@example.com'})),h(Button,{icon:'mail',onClick:testEmail,disabled:busy==='email-test'||!emailReady},busy==='email-test'?'Sending…':'Send Test Email')),
+        h('div',{className:'notification-prefs'},prefToggle('new_order','Email artist for new orders'),prefToggle('digital_sale','Digital sale alerts'),prefToggle('physical_sale','Physical merch sale alerts'),prefToggle('shipping_updates','Customer shipping/tracking emails'),prefToggle('security_alerts','Security/account emails'),prefToggle('low_inventory','Low inventory alerts'),h(Field,{label:'Low inventory threshold'},h(Input,{type:'number',min:1,max:100,value:prefs.low_inventory_threshold||5,onChange:e=>setPrefs({...prefs,low_inventory_threshold:Number(e.target.value)||5})}))),h(Button,{icon:'save',onClick:savePrefs},'Save Notification Preferences')
+      )
+    )
+  )
 }
 function SecurityPanel({show}){
   const [account,setAccount]=useState(null),[pw,setPw]=useState({currentPassword:'',newPassword:'',confirm:''}),[email,setEmail]=useState({email:'',currentPassword:''}),[busy,setBusy]=useState('');
