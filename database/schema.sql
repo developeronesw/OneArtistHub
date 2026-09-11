@@ -55,6 +55,24 @@ CREATE TABLE IF NOT EXISTS download_tokens (
   token_hash TEXT PRIMARY KEY, entitlement_id TEXT NOT NULL, expires_at TEXT NOT NULL, used_at TEXT,
   FOREIGN KEY(entitlement_id) REFERENCES entitlements(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS receipt_tokens (
+  token_hash TEXT PRIMARY KEY, order_id TEXT NOT NULL, expires_at TEXT NOT NULL, revoked_at TEXT,
+  created_at TEXT NOT NULL, FOREIGN KEY(order_id) REFERENCES orders(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_receipt_tokens_order ON receipt_tokens(order_id,created_at DESC);
+CREATE TABLE IF NOT EXISTS security_events (
+  event_id TEXT PRIMARY KEY, event_type TEXT NOT NULL, actor_id TEXT, target_id TEXT,
+  source_ip_hash TEXT, user_agent_hash TEXT, success INTEGER NOT NULL DEFAULT 1,
+  reason TEXT, request_id TEXT, created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_security_events_created ON security_events(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_security_events_target ON security_events(event_type,target_id,created_at DESC);
+CREATE TABLE IF NOT EXISTS login_attempts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, login_key TEXT NOT NULL, source_ip_hash TEXT NOT NULL,
+  success INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_login_attempts_key ON login_attempts(login_key,created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_login_attempts_ip ON login_attempts(source_ip_hash,created_at DESC);
 
 -- OneArtist Hub 0.1.2 identity + notifications
 CREATE TABLE IF NOT EXISTS password_reset_tokens (

@@ -4,6 +4,7 @@ const TE=new TextEncoder();
 const TD=new TextDecoder();
 const clean=v=>String(v??'').replace(/[\u0000-\u001f\u007f]/g,'').trim();
 const safeName=v=>clean(v).replace(/[\\/:*?"<>|]+/g,'-').replace(/\s+/g,' ').replace(/^\.+|\.+$/g,'').slice(0,160)||'track';
+const ZIP_LIMITS={compressed:200*1024*1024,entries:500,uncompressed:800*1024*1024,file:200*1024*1024};
 
 function syncsafeToInt(a,b,c,d){return ((a&0x7f)<<21)|((b&0x7f)<<14)|((c&0x7f)<<7)|(d&0x7f)}
 function intToSyncsafe(n){return new Uint8Array([(n>>21)&0x7f,(n>>14)&0x7f,(n>>7)&0x7f,n&0x7f])}
@@ -34,11 +35,13 @@ export function writeMp3Metadata(bytes,{title,artist,album,trackNo,year,genre,co
 }
 
 export async function unpackReleaseZip(file){
-  const raw=new Uint8Array(await file.arrayBuffer()),entries=unzipSync(raw),tracks=[],images=[];let embeddedCover=null;
+  const raw=new Uint8Array(await file.arrayBuffer());if(raw.length>ZIP_LIMITS.compressed)throw new Error('Album ZIP is too large. The compressed archive limit is 200 MB.');
+  let entries;try{entries=unzipSync(raw)}catch{throw new Error('Album ZIP could not be safely unpacked.');}const names=Object.keys(entries);if(names.length>ZIP_LIMITS.entries)throw new Error('Album ZIP contains too many files.');let total=0;for(const data of Object.values(entries)){total+=data.length;if(data.length>ZIP_LIMITS.file||total>ZIP_LIMITS.uncompressed)throw new Error('Album ZIP expands beyond the allowed media limits.');}const tracks=[],images=[];let embeddedCover=null;
   for(const [path,data] of Object.entries(entries)){
     if(path.endsWith('/'))continue;const lower=path.toLowerCase();
+    if(/\.zip$/i.test(lower))throw new Error('Nested ZIP archives are not supported.');
     if(lower.endsWith('.mp3')){const meta=inspectMp3(data,path),base=path.split('/').pop().replace(/\.mp3$/i,'');if(!embeddedCover&&meta.cover?.bytes?.length)embeddedCover={path:`${path}#embedded`,name:'embedded-cover',bytes:meta.cover.bytes,mime:meta.cover.mime};const num=(base.match(/^\s*(\d{1,3})[\s._-]+/)||[])[1]||meta.trackNo||'';const guessed=base.replace(/^\s*\d{1,3}[\s._-]+/,'').trim();tracks.push({id:crypto.randomUUID(),path,name:path.split('/').pop(),bytes:data,title:meta.title||guessed||base,artist:meta.artist||'',album:meta.album||'',trackNo:Number(num)||tracks.length+1,year:meta.year||'',genre:meta.genre||''})}
-    else if(/\.(jpe?g|png|webp)$/i.test(lower))images.push({path,name:path.split('/').pop(),bytes:data,mime:lower.endsWith('.png')?'image/png':lower.endsWith('.webp')?'image/webp':'image/jpeg'});
+    else if(/\.(jpe?g|png|webp)$/i.test(lower)){if(data.length>25*1024*1024)throw new Error('Album artwork exceeds the 25 MB image limit.');images.push({path,name:path.split('/').pop(),bytes:data,mime:lower.endsWith('.png')?'image/png':lower.endsWith('.webp')?'image/webp':'image/jpeg'});}
   }
   tracks.sort((a,b)=>(a.trackNo||999)-(b.trackNo||999)||a.name.localeCompare(b.name));tracks.forEach((t,i)=>t.trackNo=i+1);
   const cover=images.find(x=>/cover|folder|front|artwork|album/i.test(x.name))||images[0]||embeddedCover||null;

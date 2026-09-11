@@ -14,7 +14,7 @@ export class MySQLD1Adapter{
   constructor(pool){this.pool=pool}
   prepare(sql){return new Statement(this,sql)}
   async batch(statements){const conn=await this.pool.getConnection();try{await conn.beginTransaction();const out=[];for(const st of statements)out.push(await st._runOn(conn));await conn.commit();return out}catch(e){await conn.rollback();throw e}finally{conn.release()}}
-  async exec(){return {count:0,duration:0};}
+  async exec(sql){const statements=String(sql).split(/;\s*(?:\r?\n|$)/).map(x=>x.trim()).filter(Boolean);for(const statement of statements)await this.pool.query(sqlForMySQL(statement));return {count:statements.length,duration:0};}
 }
 
 export async function createMySQLAdapter(config){

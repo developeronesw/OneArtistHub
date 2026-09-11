@@ -47,6 +47,19 @@ CREATE TABLE IF NOT EXISTS download_tokens (
   token_hash VARCHAR(128) PRIMARY KEY, entitlement_id VARCHAR(190) NOT NULL, expires_at VARCHAR(40) NOT NULL, used_at VARCHAR(40),
   CONSTRAINT fk_download_tokens_entitlement FOREIGN KEY(entitlement_id) REFERENCES entitlements(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS receipt_tokens (
+  token_hash VARCHAR(128) PRIMARY KEY, order_id VARCHAR(190) NOT NULL, expires_at VARCHAR(40) NOT NULL, revoked_at VARCHAR(40), created_at VARCHAR(40) NOT NULL,
+  CONSTRAINT fk_receipt_tokens_order FOREIGN KEY(order_id) REFERENCES orders(id) ON DELETE CASCADE, INDEX idx_receipt_tokens_order(order_id,created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS security_events (
+  event_id VARCHAR(190) PRIMARY KEY, event_type VARCHAR(100) NOT NULL, actor_id VARCHAR(190), target_id VARCHAR(190),
+  source_ip_hash VARCHAR(128), user_agent_hash VARCHAR(128), success TINYINT NOT NULL DEFAULT 1, reason VARCHAR(500), request_id VARCHAR(190), created_at VARCHAR(40) NOT NULL,
+  INDEX idx_security_events_created(created_at), INDEX idx_security_events_target(event_type,target_id,created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS login_attempts (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT, login_key VARCHAR(190) NOT NULL, source_ip_hash VARCHAR(128) NOT NULL, success TINYINT NOT NULL DEFAULT 0, created_at VARCHAR(40) NOT NULL,
+  INDEX idx_login_attempts_key(login_key,created_at), INDEX idx_login_attempts_ip(source_ip_hash,created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS password_reset_tokens (
   token_hash VARCHAR(128) PRIMARY KEY, admin_id BIGINT NOT NULL, expires_at VARCHAR(40) NOT NULL, used_at VARCHAR(40), created_at VARCHAR(40) NOT NULL,
   CONSTRAINT fk_reset_admin FOREIGN KEY(admin_id) REFERENCES admins(id) ON DELETE CASCADE, INDEX idx_password_reset_admin(admin_id,created_at)

@@ -72,6 +72,9 @@ function useToast(){const [toast,setToast]=useState(null);const show=(text,error
 function Toast({toast}){return toast?h('div',{className:'toast'+(toast.error?' error':'')},toast.text):null}
 
 async function api(path,opts={}){
+  const receiptToken=new URLSearchParams(location.search).get('token')||'';
+  if(receiptToken&&path.startsWith('order/')&&!path.includes('?'))path+=`?token=${encodeURIComponent(receiptToken)}`;
+  if(receiptToken&&path==='downloads/request'&&typeof opts.body==='string'){try{opts={...opts,body:JSON.stringify({...JSON.parse(opts.body),receiptToken})}}catch{}}
   const res=await fetch('/api/'+path,{credentials:'same-origin',headers:{'content-type':'application/json',...(window.__OAH_CSRF?{'x-csrf-token':window.__OAH_CSRF}:{}),...(opts.headers||{})},...opts});
   let data={};try{data=await res.json()}catch{}
   if(!res.ok)throw new Error(data.error||data.message||`Request failed (${res.status})`);return data;
@@ -347,7 +350,7 @@ function AlbumImporter({onClose,onSaved,show}){
       setStage('edit');setProgress('');
     }catch(e){show(e.message,true)}finally{setBusy(false)}
   }
-  async function chooseCover(file){if(!file)return;const lower=file.name.toLowerCase();if(!/\.(jpe?g|png|webp)$/.test(lower)){show('Choose a JPG, PNG or WebP cover image.',true);return}const bytes=new Uint8Array(await file.arrayBuffer()),mime=file.type|| (lower.endsWith('.png')?'image/png':lower.endsWith('.webp')?'image/webp':'image/jpeg');setCover({name:file.name,path:file.name,bytes,mime});setCoverAsset(null);if(coverUrl?.startsWith('blob:'))URL.revokeObjectURL(coverUrl);setCoverUrl(URL.createObjectURL(file));}
+  async function chooseCover(file){if(!file)return;const lower=file.name.toLowerCase();if(!/\.(jpe?g|png|webp)$/.test(lower)){show('Choose a JPG, PNG or WebP cover image.',true);return}if(file.size>25*1024*1024){show('Cover artwork must be 25 MB or smaller.',true);return}const bytes=new Uint8Array(await file.arrayBuffer()),mime=file.type|| (lower.endsWith('.png')?'image/png':lower.endsWith('.webp')?'image/webp':'image/jpeg');setCover({name:file.name,path:file.name,bytes,mime});setCoverAsset(null);if(coverUrl?.startsWith('blob:'))URL.revokeObjectURL(coverUrl);setCoverUrl(URL.createObjectURL(file));}
   async function chooseLibraryCover(asset){try{const r=await fetch(asset.url,{credentials:'same-origin'});if(!r.ok)throw new Error('Could not load the selected Media Library image.');const bytes=new Uint8Array(await r.arrayBuffer()),mime=asset.contentType||r.headers.get('content-type')||'image/jpeg';setCover({name:asset.filename,path:asset.filename,bytes,mime});setCoverAsset(asset);if(coverUrl?.startsWith('blob:'))URL.revokeObjectURL(coverUrl);setCoverUrl(asset.url);setCoverPicker(false)}catch(e){show(e.message,true)}}
   function move(from,to){if(to<0||to>=tracks.length||from===to)return;setTracks(list=>{const n=[...list],x=n.splice(from,1)[0];n.splice(to,0,x);return n.map((t,i)=>({...t,trackNo:i+1}))})}
   function drop(from,to){move(Number(from),Number(to))}

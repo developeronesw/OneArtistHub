@@ -79,6 +79,17 @@ CREATE TABLE IF NOT EXISTS email_queue (id TEXT PRIMARY KEY, recipient TEXT NOT 
 CREATE INDEX IF NOT EXISTS idx_email_queue_due ON email_queue(status,next_attempt_at);`;
 let upgrade022Ready=false;
 async function ensureUpgrade022(env){ if(upgrade022Ready)return; await env.DB.exec(MIGRATION_022); upgrade022Ready=true; }
+const MIGRATION_023 = `
+CREATE TABLE IF NOT EXISTS receipt_tokens (token_hash TEXT PRIMARY KEY, order_id TEXT NOT NULL, expires_at TEXT NOT NULL, revoked_at TEXT, created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_receipt_tokens_order ON receipt_tokens(order_id,created_at DESC);
+CREATE TABLE IF NOT EXISTS security_events (event_id TEXT PRIMARY KEY, event_type TEXT NOT NULL, actor_id TEXT, target_id TEXT, source_ip_hash TEXT, user_agent_hash TEXT, success INTEGER NOT NULL DEFAULT 1, reason TEXT, request_id TEXT, created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_security_events_created ON security_events(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_security_events_target ON security_events(event_type,target_id,created_at DESC);
+CREATE TABLE IF NOT EXISTS login_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, login_key TEXT NOT NULL, source_ip_hash TEXT NOT NULL, success INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_login_attempts_key ON login_attempts(login_key,created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_login_attempts_ip ON login_attempts(source_ip_hash,created_at DESC);`;
+let upgrade023Ready=false;
+async function ensureUpgrade023(env){ if(upgrade023Ready)return; await env.DB.exec(MIGRATION_023); upgrade023Ready=true; }
 
 
 const ALLOWED_TYPES = new Set(['release','track','video','tour','product','page','media','news']);
@@ -97,7 +108,10 @@ const sanitizeHtml = v => cleanText(v,50000)
   .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,'')
   .replace(/<iframe\b[^>]*>[\s\S]*?<\/iframe>/gi,'')
   .replace(/\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi,'')
-  .replace(/javascript\s*:/gi,'');
+  .replace(/\s(?:style|srcdoc)\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi,'')
+  .replace(/(?:javascript|vbscript|data)\s*:/gi,'');
+const safeUrl=v=>{const value=cleanText(v,2000).trim();if(!value)return '';if(value.startsWith('/')&&!value.startsWith('//'))return value;try{const u=new URL(value);return ['https:','http:','mailto:','tel:'].includes(u.protocol)?u.toString():''}catch{return ''}};
+function sanitizeContentData(type,data){ const out={...(data||{})}; for(const key of ['cover','image','audio','thumbnail','heroImage','logo','profileImage','ticketUrl','youtubeUrl','instagram','facebook','tiktok','spotify','appleMusic'])if(key in out)out[key]=safeUrl(out[key]); if(type==='page')out.html=sanitizeHtml(out.html||''); return out; }
 
 const safeFileName=v=>cleanText(v,180).replace(/[\\/:*?"<>|]+/g,'-').replace(/\s+/g,' ').replace(/^\.+|\.+$/g,'')||'file';
 async function dropboxConfig(env){const r=await env.DB.prepare(`SELECT data_enc FROM integrations WHERE provider='dropbox'`).first();return r?decrypt(env,r.data_enc):null;}
@@ -170,6 +184,16 @@ function publicMediaAllowed(contentType='',filename=''){
     c.startsWith('audio/')||c.startsWith('video/')||c==='application/pdf'||c==='text/plain'||
     /\.(jpe?g|png|webp|gif|mp3|wav|m4a|aac|ogg|flac|mp4|webm|mov|m4v|pdf|txt)$/i.test(f);
 }
+function mediaBytesMatch(contentType,bytes,filename=''){
+  const b=bytes instanceof Uint8Array?bytes:new Uint8Array(bytes), c=String(contentType||'').toLowerCase(), f=String(filename||'').toLowerCase();
+  if(c==='image/jpeg')return b[0]===0xff&&b[1]===0xd8&&b[2]===0xff;
+  if(c==='image/png')return b[0]===0x89&&b[1]===0x50&&b[2]===0x4e&&b[3]===0x47;
+  if(c==='image/gif')return String.fromCharCode(...b.slice(0,6))==='GIF89a'||String.fromCharCode(...b.slice(0,6))==='GIF87a';
+  if(c==='application/zip'||f.endsWith('.zip'))return b[0]===0x50&&b[1]===0x4b;
+  if(c==='audio/wav')return String.fromCharCode(...b.slice(0,4))==='RIFF'&&String.fromCharCode(...b.slice(8,12))==='WAVE';
+  if(c==='application/pdf')return String.fromCharCode(...b.slice(0,4))==='%PDF';
+  return true;
+}
 function mediaFolder(storageKey=''){
   const parts=String(storageKey||'').split('/').filter(Boolean);
   return parts[0]==='oneartist'&&parts[1]?parts[1]:'media';
@@ -215,6 +239,7 @@ async function deleteStoredObject(env,row){
 }
 
 async function body(req){ try{return await req.json()}catch{return {}} }
+async function readLimitedBody(req,limit){ if(!req.body)return new Uint8Array(); const reader=req.body.getReader(),chunks=[],max=Number(limit)||0;let total=0;try{for(;;){const part=await reader.read();if(part.done)break;total+=part.value.byteLength;if(total>max){await reader.cancel();const error=new Error('Request body is too large.');error.code='PAYLOAD_TOO_LARGE';throw error}chunks.push(part.value)}}finally{reader.releaseLock()}const out=new Uint8Array(total);let offset=0;for(const chunk of chunks){out.set(chunk,offset);offset+=chunk.byteLength}return out; }
 async function sha(v){ return hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(v)))) }
 async function hashPassword(password,salt){
   const key = await crypto.subtle.importKey('raw',new TextEncoder().encode(password),'PBKDF2',false,['deriveBits']);
@@ -232,6 +257,10 @@ async function auth(req,env){
   return row;
 }
 function requireCsrf(req,user){ return user && req.headers.get('x-csrf-token')===user.csrf; }
+const requestId=req=>cleanText(req.headers.get('x-request-id')||id(),120);
+async function securityEvent(req,env,eventType,{actorId='',targetId='',success=true,reason='',request=''}={}){ try{await env.DB.prepare('INSERT INTO security_events(event_id,event_type,actor_id,target_id,source_ip_hash,user_agent_hash,success,reason,request_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)').bind(id(),cleanText(eventType,100),cleanText(actorId,190)||null,cleanText(targetId,190)||null,await sha(req.headers.get('cf-connecting-ip')||'local'),await sha(req.headers.get('user-agent')||''),success?1:0,cleanText(reason,500)||null,cleanText(request||requestId(req),120),now()).run()}catch(err){console.error('Security event write failed',err)} }
+async function loginThrottle(req,env,login){ const ip=await sha(req.headers.get('cf-connecting-ip')||'local'), key=await sha(String(login||'').toLowerCase()); const q=await env.DB.prepare(`SELECT COUNT(*) c FROM login_attempts WHERE (login_key=? OR source_ip_hash=?) AND success=0 AND created_at>=datetime('now','-15 minutes')`).bind(key,ip).first(); const failures=Number(q?.c||0); const delay=failures>=10?Math.min(8000,500*Math.pow(2,Math.min(4,failures-10))):failures>=3?Math.min(3000,250*Math.pow(2,failures-3)):0; return {ip,key,failures,delay,locked:failures>=15}; }
+async function recordLoginAttempt(req,env,login,success){ const t=await loginThrottle(req,env,login); await env.DB.prepare('INSERT INTO login_attempts(login_key,source_ip_hash,success,created_at) VALUES(?,?,?,?)').bind(t.key,t.ip,success?1:0,now()).run(); return t; }
 async function getSettings(env){ const {results=[]}=await env.DB.prepare('SELECT key,value FROM settings').all(); const out={}; for(const r of results){ try{out[r.key]=JSON.parse(r.value)}catch{out[r.key]=r.value} } return out; }
 async function setSetting(env,key,value){ await env.DB.prepare(`INSERT INTO settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`).bind(key,JSON.stringify(value),now()).run(); }
 function contentRow(row){ if(!row)return row; let data={}; try{data=JSON.parse(row.data||'{}')}catch{} return {...row,featured:!!row.featured,data}; }
@@ -282,10 +311,10 @@ async function sendEmail(env,{to,subject,html,text='',template='generic'}){
 async function emailShell(env,title,content){ const settings=await getSettings(env), artist=htmlEscape(settings.artist?.name||settings.site?.title||'OneArtist Hub'), accent=htmlEscape(settings.site?.accent||'#b45cff'); return `<!doctype html><html><body style="margin:0;background:#070812;color:#eef1ff;font-family:Arial,sans-serif"><div style="max-width:640px;margin:0 auto;padding:30px 18px"><div style="padding:26px;border:1px solid #282b45;border-radius:18px;background:#0d0f1d"><div style="font-size:13px;letter-spacing:.14em;color:${accent};text-transform:uppercase">${artist}</div><h1 style="margin:8px 0 18px;font-size:28px">${htmlEscape(title)}</h1>${content}<div style="margin-top:26px;padding-top:18px;border-top:1px solid #282b45;color:#8f96b3;font-size:12px">Powered by OneArtist Hub</div></div></div></body></html>`; }
 async function adminEmail(env){ const a=await env.DB.prepare('SELECT email FROM admins ORDER BY id LIMIT 1').first(); return a?.email||''; }
 async function sendSecurityEmail(env,to,title,message){ if(!to)return; const prefs=await notificationPrefs(env); if(!prefs.security_alerts)return {ok:false,skipped:true}; const html=await emailShell(env,title,`<p style="line-height:1.7;color:#cdd1e4">${htmlEscape(message)}</p>`); return sendEmail(env,{to,subject:title,html,text:message,template:'security'}); }
-async function sendOrderEmails(env,order,items,url){
+async function sendOrderEmails(env,order,items,url,receiptToken=''){
   const prefs=await notificationPrefs(env), settings=await getSettings(env), currency=order.currency||'USD', hasPhysical=items.some(x=>x.kind==='physical'), hasDigital=items.some(x=>x.kind==='digital');
   const rows=items.map(x=>`<tr><td style="padding:9px 0;border-bottom:1px solid #24263c">${htmlEscape(x.title)} × ${x.qty}</td><td style="padding:9px 0;border-bottom:1px solid #24263c;text-align:right">${new Intl.NumberFormat('en-US',{style:'currency',currency}).format(Number(x.price)*Number(x.qty))}</td></tr>`).join('');
-  const receiptUrl=`${url.origin}/order/${encodeURIComponent(order.publicId)}`;
+  const receiptUrl=`${url.origin}/order/${encodeURIComponent(order.publicId)}?token=${encodeURIComponent(receiptToken)}`;
   const customerHtml=await emailShell(env,'Thanks for your purchase',`<p style="color:#cdd1e4">Order <strong>${htmlEscape(order.publicId)}</strong> is paid.</p><table style="width:100%;border-collapse:collapse;color:#eef1ff">${rows}</table><p style="font-size:20px"><strong>Total: ${new Intl.NumberFormat('en-US',{style:'currency',currency}).format(order.total)}</strong></p>${hasDigital?'<p style="color:#9cefc7">Your digital downloads are available from the receipt page.</p>':''}<p><a href="${receiptUrl}" style="display:inline-block;padding:12px 18px;border-radius:999px;background:#8d66ff;color:white;text-decoration:none">View Receipt${hasDigital?' & Downloads':''}</a></p>`);
   await sendEmail(env,{to:order.email,subject:`Purchase receipt — ${settings.artist?.name||'OneArtist Hub'}`,html:customerHtml,text:`Your order ${order.publicId} is paid. Receipt: ${receiptUrl}`,template:'purchase_receipt'});
   const ae=await adminEmail(env); if(ae&&prefs.new_order&&((hasPhysical&&prefs.physical_sale)||(hasDigital&&prefs.digital_sale))){ const label=hasPhysical&&hasDigital?'Mixed order':hasPhysical?'Merch order':'Digital sale'; const adminHtml=await emailShell(env,'New sale',`<p style="color:#cdd1e4"><strong>${htmlEscape(label)}</strong> from ${htmlEscape(order.name||order.email)}.</p><table style="width:100%;border-collapse:collapse;color:#eef1ff">${rows}</table><p style="font-size:20px"><strong>Total: ${new Intl.NumberFormat('en-US',{style:'currency',currency}).format(order.total)}</strong></p>`); await sendEmail(env,{to:ae,subject:`New sale — ${new Intl.NumberFormat('en-US',{style:'currency',currency}).format(order.total)}`,html:adminHtml,text:`New order ${order.publicId} for ${order.total} ${currency}.`,template:'admin_new_order'}); }
@@ -352,10 +381,14 @@ async function orderPayload(env,o){
   const doc=await orderDocument(env,o.id), settings=await getSettings(env);
   return {...o,shipping:parseJson(o.shipping_json,{}),data:parseJson(o.data,{}),invoice_number:doc?.invoice_number||'',refunded_amount:Number(doc?.refunded_amount||0),items:items.map(x=>({...x,data:parseJson(x.data,{})})),entitlements:ents,transactions,branding:{artistName:settings.artist?.name||settings.site?.title||'Artist',logo:settings.artist?.logo||'/art/oneartist-logo.svg',accent:settings.site?.accent||'#b45cff',supportEmail:settings.site?.email||''}};
 }
+async function createReceiptToken(env,orderId){ const raw=bytesToB64(crypto.getRandomValues(new Uint8Array(36))).replace(/[+/=]/g,''), hash=await sha(raw), expires=new Date(Date.now()+30*864e5).toISOString(); await env.DB.prepare('INSERT INTO receipt_tokens(token_hash,order_id,expires_at,revoked_at,created_at) VALUES(?,?,?,NULL,?)').bind(hash,orderId,expires,now()).run(); return {raw,expires}; }
+async function receiptAccess(env,raw){ if(!raw)return null; const hash=await sha(raw); return env.DB.prepare(`SELECT rt.order_id,rt.expires_at,o.public_id FROM receipt_tokens rt JOIN orders o ON o.id=rt.order_id WHERE rt.token_hash=? AND rt.revoked_at IS NULL AND rt.expires_at>?`).bind(hash,now()).first(); }
+async function publicReceiptPayload(env,o){ const full=await orderPayload(env,o); return {public_id:full.public_id,customer_name:full.customer_name,customer_email:'',currency:full.currency,subtotal:full.subtotal,shipping:full.shipping,total:full.total,status:full.status,fulfillment_status:full.fulfillment_status,tracking_carrier:full.tracking_carrier,tracking_number:full.tracking_number,created_at:full.created_at,invoice_number:full.invoice_number,refunded_amount:full.refunded_amount,items:full.items.map(x=>({product_id:x.product_id,title:x.title,quantity:x.quantity,unit_price:x.unit_price,kind:x.kind,data:{selectedVariant:x.data?.selectedVariant||null}})),entitlements:full.entitlements.map(x=>({id:x.id,product_id:x.product_id,downloads_used:x.downloads_used,downloads_max:x.downloads_max,created_at:x.created_at})),transactions:full.transactions.filter(x=>x.type==='capture').map(x=>({type:x.type,provider_id:x.provider_id,status:x.status,created_at:x.created_at})),branding:full.branding}; }
 async function paypalWebhookVerify(req,rawEvent,cfg){
   if(!cfg?.webhookId)throw new Error('PayPal Webhook ID is not configured.');
   const pp=await paypalAccess(cfg), headers={auth_algo:req.headers.get('paypal-auth-algo')||'',cert_url:req.headers.get('paypal-cert-url')||'',transmission_id:req.headers.get('paypal-transmission-id')||'',transmission_sig:req.headers.get('paypal-transmission-sig')||'',transmission_time:req.headers.get('paypal-transmission-time')||'',webhook_id:cfg.webhookId};
   if([headers.auth_algo,headers.cert_url,headers.transmission_id,headers.transmission_sig,headers.transmission_time].some(v=>!v))throw new Error('PayPal webhook signature headers are incomplete.');
+  try{const cert=new URL(headers.cert_url);if(cert.protocol!=='https:'||!/(^|\.)paypal\.com$/i.test(cert.hostname))throw new Error('PayPal certificate host is invalid.')}catch{throw new Error('PayPal certificate URL is invalid.')}
   // Preserve the webhook_event bytes exactly as received. PayPal warns that parsing and re-serializing the event can break verification.
   const prefix=JSON.stringify(headers); const verifyBody=prefix.slice(0,-1)+`,"webhook_event":${rawEvent}}`;
   const r=await fetch(`${pp.base}/v1/notifications/verify-webhook-signature`,{method:'POST',headers:{authorization:`Bearer ${pp.token}`,'content-type':'application/json'},body:verifyBody});
@@ -380,7 +413,7 @@ async function finalizeCapturedOrder(env,url,paypalOrderId,j,items,checkout,ctx,
   const low=[];
   for(const x of items){ await env.DB.prepare(`INSERT INTO order_items(order_id,product_id,title,quantity,unit_price,kind,data) VALUES(?,?,?,?,?,?,?)`).bind(orderId,x.id,x.title,x.qty,x.price,x.kind,JSON.stringify({...x.data,selectedVariant:x.selectedVariant||null})).run(); if(x.kind==='digital')await env.DB.prepare(`INSERT INTO entitlements(id,order_id,product_id,customer_email,downloads_used,downloads_max,created_at) VALUES(?,?,?,?,0,?,?)`).bind(id(),orderId,x.id,email,Math.max(1,Math.min(50,Number(settings.commerce?.downloadsMax)||5)),t).run(); const inv=await updateProductInventory(env,x,t); if(inv.remaining!=null)low.push(inv); }
   await env.DB.prepare('DELETE FROM checkout_sessions WHERE paypal_order_id=?').bind(paypalOrderId).run();
-  const saleLabel=items.some(x=>x.kind==='physical')?'New merchandise order':'New digital sale'; await createNotification(env,'sale',saleLabel,`${name||email} purchased ${items.map(x=>x.title).join(', ')} for ${checkout.total} ${checkout.currency}.`,'orders'); const orderForEmail={publicId,total:Number(checkout.total),email,name,currency:checkout.currency}; const task=sendOrderEmails(env,orderForEmail,items,url); ctx?.waitUntil?ctx.waitUntil(task):await task;
+  const saleLabel=items.some(x=>x.kind==='physical')?'New merchandise order':'New digital sale'; await createNotification(env,'sale',saleLabel,`${name||email} purchased ${items.map(x=>x.title).join(', ')} for ${checkout.total} ${checkout.currency}.`,'orders'); const receiptToken=await createReceiptToken(env,orderId), orderForEmail={publicId,total:Number(checkout.total),email,name,currency:checkout.currency}; const task=sendOrderEmails(env,orderForEmail,items,url,receiptToken.raw); ctx?.waitUntil?ctx.waitUntil(task):await task;
   const prefs=await notificationPrefs(env); if(prefs.low_inventory){for(const x of low.filter(x=>x.remaining<=Number(prefs.low_inventory_threshold||5))){const inventoryMessage=`${x.label} has ${x.remaining} item(s) remaining.`;await createNotification(env,'inventory','Low inventory',inventoryMessage,'product');const ae=await adminEmail(env);if(ae){const html=await emailShell(env,'Low inventory',`<p style=\"color:#cdd1e4\">${htmlEscape(inventoryMessage)}</p>`);const lowTask=sendEmail(env,{to:ae,subject:`Low inventory — ${x.label}`,html,text:inventoryMessage,template:'low_inventory'});ctx?.waitUntil?ctx.waitUntil(lowTask):await lowTask;}}}
   return orderPayload(env,await env.DB.prepare('SELECT * FROM orders WHERE id=?').bind(orderId).first());
 }
@@ -389,7 +422,7 @@ export async function route(req,env,url,ctx){
   if(!env.DB) return json({ok:false,error:'D1 binding DB is missing. Add a D1 binding named DB in Cloudflare.'},503);
   const p=url.pathname.replace(/^\/api\/?/,'').replace(/\/$/,'');
   const method=req.method.toUpperCase();
-  const installed=await isInstalled(env); if(installed){await ensureUpgrade012(env);await ensureUpgrade013(env);await ensureUpgrade020(env);await ensureUpgrade022(env);if(ctx?.waitUntil)ctx.waitUntil(processEmailQueue(env,3));}
+  const installed=await isInstalled(env); if(installed){await ensureUpgrade012(env);await ensureUpgrade013(env);await ensureUpgrade020(env);await ensureUpgrade022(env);await ensureUpgrade023(env);if(ctx?.waitUntil)ctx.waitUntil(processEmailQueue(env,3));}
   if(p==='status' && method==='GET') return json({ok:true,installed,version:'0.3.0'});
   if(p==='setup' && method==='POST'){
     if(await isInstalled(env)) return json({ok:false,error:'OneArtist Hub is already installed.'},409);
@@ -442,27 +475,29 @@ export async function route(req,env,url,ctx){
     const th=await sha(token), row=await env.DB.prepare(`SELECT prt.*,a.email FROM password_reset_tokens prt JOIN admins a ON a.id=prt.admin_id WHERE prt.token_hash=?`).bind(th).first();
     if(!row||row.used_at||new Date(row.expires_at)<=new Date())return json({ok:false,error:'This reset link is invalid or has expired.'},410);
     const salt=bytesToB64(crypto.getRandomValues(new Uint8Array(18))), ph=await hashPassword(password,salt), t=now();
-    await env.DB.batch([env.DB.prepare('UPDATE admins SET password_hash=?,password_salt=? WHERE id=?').bind(ph,salt,row.admin_id),env.DB.prepare('UPDATE password_reset_tokens SET used_at=? WHERE token_hash=?').bind(t,th),env.DB.prepare('DELETE FROM sessions WHERE admin_id=?').bind(row.admin_id)]);
+    await env.DB.batch([env.DB.prepare('UPDATE admins SET password_hash=?,password_salt=? WHERE id=?').bind(ph,salt,row.admin_id),env.DB.prepare('UPDATE password_reset_tokens SET used_at=? WHERE token_hash=?').bind(t,th),env.DB.prepare('DELETE FROM sessions WHERE admin_id=?').bind(row.admin_id)]); await securityEvent(req,env,'password_reset',{actorId:String(row.admin_id),targetId:String(row.admin_id)});
     await createNotification(env,'security','Password reset','The administrator password was reset using email recovery.','security');
     const task=sendSecurityEmail(env,row.email,'OneArtist Hub password changed','Your administrator password was reset. If this was not you, review your account and email provider immediately.'); ctx?.waitUntil?ctx.waitUntil(task):await task;
     return json({ok:true});
   }
 
   if(p==='auth/emergency-reset' && method==='POST'){
-    const b=await body(req); if(!env.ONEARTIST_SETUP_KEY||String(b.setupKey||'')!==env.ONEARTIST_SETUP_KEY)return json({ok:false,error:'Invalid recovery key.'},403);
-    const login=cleanText(b.login,160).trim(), password=String(b.password||''); if(password.length<10)return json({ok:false,error:'New password must be at least 10 characters.'},400);
-    const a=await env.DB.prepare('SELECT * FROM admins WHERE username=? OR email=?').bind(login,login.toLowerCase()).first(); if(!a)return json({ok:false,error:'Administrator account was not found.'},404);
-    const salt=bytesToB64(crypto.getRandomValues(new Uint8Array(18))), ph=await hashPassword(password,salt); await env.DB.batch([env.DB.prepare('UPDATE admins SET password_hash=?,password_salt=? WHERE id=?').bind(ph,salt,a.id),env.DB.prepare('DELETE FROM sessions WHERE admin_id=?').bind(a.id)]); await createNotification(env,'security','Emergency password recovery','The administrator password was reset with the deployment recovery key.','security'); return json({ok:true});
+    const b=await body(req), login=cleanText(b.login,160).trim(), throttle=await loginThrottle(req,env,`emergency:${login}`); if(throttle.locked)return json({ok:false,error:'Recovery temporarily unavailable. Try again later.'},429); if(throttle.delay)await new Promise(resolve=>setTimeout(resolve,throttle.delay));
+    if(!env.ONEARTIST_SETUP_KEY||String(b.setupKey||'')!==env.ONEARTIST_SETUP_KEY){await recordLoginAttempt(req,env,`emergency:${login}`,false);await securityEvent(req,env,'emergency_reset_attempt',{targetId:login,success:false,reason:'invalid_recovery_key'});return json({ok:false,error:'Recovery request could not be completed.'},403);}
+    const password=String(b.password||''); if(password.length<10)return json({ok:false,error:'New password must be at least 10 characters.'},400);
+    const a=await env.DB.prepare('SELECT * FROM admins WHERE username=? OR email=?').bind(login,login.toLowerCase()).first(); if(!a){await recordLoginAttempt(req,env,`emergency:${login}`,false);return json({ok:false,error:'Recovery request could not be completed.'},403);}
+    const salt=bytesToB64(crypto.getRandomValues(new Uint8Array(18))), ph=await hashPassword(password,salt); await env.DB.batch([env.DB.prepare('UPDATE admins SET password_hash=?,password_salt=? WHERE id=?').bind(ph,salt,a.id),env.DB.prepare('DELETE FROM sessions WHERE admin_id=?').bind(a.id)]); await recordLoginAttempt(req,env,`emergency:${login}`,true); await securityEvent(req,env,'emergency_reset_success',{actorId:String(a.id),targetId:String(a.id)}); await createNotification(env,'security','Emergency password recovery','The administrator password was reset with the deployment recovery key.','security'); const task=sendSecurityEmail(env,a.email,'Emergency password recovery used','Your administrator password was reset using the deployment recovery key.');ctx?.waitUntil?ctx.waitUntil(task):await task; return json({ok:true});
   }
   if(p==='auth/login' && method==='POST'){
-    const b=await body(req), login=cleanText(b.login,160).trim(); const a=await env.DB.prepare('SELECT * FROM admins WHERE username=? OR email=?').bind(login,login.toLowerCase()).first();
-    if(!a || await hashPassword(String(b.password||''),a.password_salt)!==a.password_hash) return json({ok:false,error:'Invalid username/email or password.'},401);
+    const b=await body(req), login=cleanText(b.login,160).trim(), throttle=await loginThrottle(req,env,login); if(throttle.locked)return json({ok:false,error:'Invalid username/email or password.'},401); if(throttle.delay)await new Promise(resolve=>setTimeout(resolve,throttle.delay)); const a=await env.DB.prepare('SELECT * FROM admins WHERE username=? OR email=?').bind(login,login.toLowerCase()).first();
+    if(!a || await hashPassword(String(b.password||''),a.password_salt)!==a.password_hash){await recordLoginAttempt(req,env,login,false);await securityEvent(req,env,'login_failure',{targetId:login,success:false,reason:'invalid_credentials'});return json({ok:false,error:'Invalid username/email or password.'},401);}
+    await recordLoginAttempt(req,env,login,true);await securityEvent(req,env,'login_success',{actorId:String(a.id),targetId:String(a.id)});
     const sid=bytesToB64(crypto.getRandomValues(new Uint8Array(32))).replace(/[+/=]/g,''), csrf=bytesToB64(crypto.getRandomValues(new Uint8Array(24))).replace(/[+/=]/g,''), exp=new Date(Date.now()+7*864e5).toISOString();
-    await env.DB.prepare('INSERT INTO sessions(id,admin_id,csrf,expires_at,created_at) VALUES(?,?,?,?,?)').bind(sid,a.id,csrf,exp,now()).run();
+    await env.DB.prepare('INSERT INTO sessions(id,admin_id,csrf,expires_at,created_at) VALUES(?,?,?,?,?)').bind(sid,a.id,csrf,exp,now()).run(); await securityEvent(req,env,'session_creation',{actorId:String(a.id),targetId:String(a.id)});
     return json({ok:true,user:{username:a.username,email:a.email},csrf},200,{'set-cookie':`oah_session=${encodeURIComponent(sid)}; Path=/; HttpOnly${secureCookieAttr(url)}; SameSite=Lax; Max-Age=604800`});
   }
   if(p==='auth/me' && method==='GET'){ const u=await auth(req,env); return u?json({ok:true,user:{username:u.username,email:u.email},csrf:u.csrf}):json({ok:false},401); }
-  if(p==='auth/logout' && method==='POST'){ const u=await auth(req,env); if(u)await env.DB.prepare('DELETE FROM sessions WHERE id=?').bind(u.id).run(); return json({ok:true},200,{'set-cookie':`oah_session=; Path=/; HttpOnly${secureCookieAttr(url)}; SameSite=Lax; Max-Age=0`}); }
+  if(p==='auth/logout' && method==='POST'){ const u=await auth(req,env); if(u){await env.DB.prepare('DELETE FROM sessions WHERE id=?').bind(u.id).run();await securityEvent(req,env,'session_revocation',{actorId:String(u.admin_id),targetId:String(u.admin_id),reason:'logout'});} return json({ok:true},200,{'set-cookie':`oah_session=; Path=/; HttpOnly${secureCookieAttr(url)}; SameSite=Lax; Max-Age=0`}); }
 
   if(p==='public/bootstrap' && method==='GET'){
     const settings=await getSettings(env); const {results=[]}=await env.DB.prepare(`SELECT * FROM content_items WHERE status='published' ORDER BY COALESCE(sort_date,created_at) DESC`).all();
@@ -503,7 +538,7 @@ export async function route(req,env,url,ctx){
   if(p==='paypal/webhook' && method==='POST'){
     const cfg=await paypalConfig(env); if(!cfg?.clientId||!cfg?.clientSecret||!cfg?.webhookId)return json({ok:false,error:'PayPal webhook verification is not configured.'},503);
     const raw=await req.text(); let event={}; try{event=JSON.parse(raw)}catch{return json({ok:false,error:'Invalid webhook body.'},400)}
-    const verified=await paypalWebhookVerify(req,raw,cfg); if(!verified)return json({ok:false,error:'Webhook signature verification failed.'},400); const eventId=cleanText(event.id,160), eventType=cleanText(event.event_type,120); if(!eventId)return json({ok:false,error:'Webhook event ID is missing.'},400);
+    let verified=false;try{verified=await paypalWebhookVerify(req,raw,cfg)}catch(err){await securityEvent(req,env,'paypal_verification_failure',{success:false,reason:err.message});return json({ok:false,error:'Webhook signature verification failed.'},400)} if(!verified){await securityEvent(req,env,'paypal_verification_failure',{success:false,reason:'verification_rejected'});return json({ok:false,error:'Webhook signature verification failed.'},400);} const eventId=cleanText(event.id,160), eventType=cleanText(event.event_type,120); if(!eventId)return json({ok:false,error:'Webhook event ID is missing.'},400);
     const seen=await env.DB.prepare('SELECT event_id,status FROM webhook_events WHERE event_id=?').bind(eventId).first(); if(seen?.status==='processed')return json({ok:true,duplicate:true}); if(!seen)await env.DB.prepare('INSERT INTO webhook_events(event_id,event_type,status,payload,created_at) VALUES(?,?,?,?,?)').bind(eventId,eventType,'processing',raw,now()).run(); else await env.DB.prepare('UPDATE webhook_events SET status=?,error=NULL WHERE event_id=?').bind('processing',eventId).run();
     try{
       const resource=event.resource||{}, paypalOrderId=resource.supplementary_data?.related_ids?.order_id||resource.id||'';
@@ -513,14 +548,14 @@ export async function route(req,env,url,ctx){
         // Keep the verified checkout snapshot; do not fulfill until COMPLETED arrives.
       } else if(eventType==='PAYMENT.CAPTURE.COMPLETED'){
         let order=await env.DB.prepare('SELECT * FROM orders WHERE paypal_order_id=?').bind(paypalOrderId).first();
-        if(order){await env.DB.prepare("UPDATE orders SET status='paid',updated_at=? WHERE id=?").bind(now(),order.id).run();await recordTransaction(env,{orderId:order.id,type:'capture',providerId:resource.id,status:resource.status||'COMPLETED',amount:resource.amount?.value||order.total,currency:resource.amount?.currency_code||order.currency,data:resource});}
+        if(order){const amount=money(resource.amount?.value),currency=currencyCode(resource.amount?.currency_code);if(amount!==money(order.total)||currency!==order.currency)throw new Error('Verified PayPal capture did not match the order total.');await env.DB.prepare("UPDATE orders SET status='paid',updated_at=? WHERE id=?").bind(now(),order.id).run();await recordTransaction(env,{orderId:order.id,type:'capture',providerId:resource.id,status:resource.status||'COMPLETED',amount,currency,data:resource});}
         else {const checkout=await env.DB.prepare('SELECT * FROM checkout_sessions WHERE paypal_order_id=?').bind(paypalOrderId).first();if(checkout&&new Date(checkout.expires_at)>new Date()){const items=parseJson(checkout.cart_json,[]),pp=await paypalAccess(cfg),or=await fetch(`${pp.base}/v2/checkout/orders/${encodeURIComponent(paypalOrderId)}`,{headers:{authorization:`Bearer ${pp.token}`}}),oj=await or.json();if(or.ok&&oj.status==='COMPLETED')await finalizeCapturedOrder(env,url,paypalOrderId,oj,items,checkout,ctx,{})}}
       } else if(eventType==='PAYMENT.CAPTURE.REFUNDED'){
         const order=await env.DB.prepare('SELECT * FROM orders WHERE paypal_order_id=?').bind(paypalOrderId).first();
         if(order){
           const prior=await transactionByProvider(env,'refund',resource.id);
           if(!prior||String(prior.status||'').toUpperCase()!=='COMPLETED'){
-            const doc=await orderDocument(env,order.id), amt=money(resource.amount?.value), refunded=money(Number(doc?.refunded_amount||0)+amt), full=refunded>=money(order.total), ts=now();
+            const doc=await orderDocument(env,order.id), amt=money(resource.amount?.value), refundCurrency=currencyCode(resource.amount?.currency_code); if(refundCurrency!==order.currency||amt<=0||money(Number(doc?.refunded_amount||0)+amt)>money(order.total))throw new Error('Verified PayPal refund did not match the order balance.'); const refunded=money(Number(doc?.refunded_amount||0)+amt), full=refunded>=money(order.total), ts=now();
             if(prior)await env.DB.prepare('UPDATE order_transactions SET status=?,amount=?,currency=?,data=? WHERE id=?').bind(resource.status||'COMPLETED',amt,resource.amount?.currency_code||order.currency,JSON.stringify(resource||{}),prior.id).run();
             else await recordTransaction(env,{orderId:order.id,type:'refund',providerId:resource.id,status:resource.status||'COMPLETED',amount:amt,currency:resource.amount?.currency_code||order.currency,data:resource});
             await env.DB.batch([env.DB.prepare('UPDATE order_documents SET refunded_amount=?,updated_at=? WHERE order_id=?').bind(refunded,ts,order.id),env.DB.prepare('UPDATE orders SET status=?,updated_at=? WHERE id=?').bind(full?'refunded':'partially_refunded',ts,order.id)]);
@@ -534,17 +569,17 @@ export async function route(req,env,url,ctx){
       await env.DB.prepare('UPDATE webhook_events SET status=?,processed_at=?,error=NULL WHERE event_id=?').bind('processed',now(),eventId).run(); return json({ok:true});
     }catch(err){await env.DB.prepare('UPDATE webhook_events SET status=?,error=? WHERE event_id=?').bind('failed',cleanText(err?.message||err,800),eventId).run();throw err}
   }
-  const orderMatch=p.match(/^order\/([^/]+)$/); if(orderMatch&&method==='GET'){ const o=await env.DB.prepare('SELECT * FROM orders WHERE public_id=?').bind(orderMatch[1]).first(); if(!o)return json({ok:false},404); return json({ok:true,order:await orderPayload(env,o)}); }
+  const orderMatch=p.match(/^order\/([^/]+)$/); if(orderMatch&&method==='GET'){ const o=await env.DB.prepare('SELECT * FROM orders WHERE public_id=?').bind(orderMatch[1]).first(); if(!o)return json({ok:false},404); const tokenAccess=await receiptAccess(env,url.searchParams.get('token')||''), customer=await customerAuth(req,env), admin=await auth(req,env); if(!tokenAccess||tokenAccess.order_id!==o.id){if(!admin&&(!customer||customer.email.toLowerCase()!==String(o.customer_email||'').toLowerCase()))return json({ok:false,error:'Receipt access is invalid or expired.'},403)} return json({ok:true,order:await publicReceiptPayload(env,o)}); }
   if(p==='downloads/request'&&method==='POST'){
-    const b=await body(req), o=await env.DB.prepare(`SELECT id,customer_email,status FROM orders WHERE public_id=? AND status IN ('paid','partially_refunded')`).bind(cleanText(b.publicId,100)).first(); if(!o||o.customer_email.toLowerCase()!==cleanText(b.email,160).toLowerCase())return json({ok:false,error:'Purchase could not be verified.'},403); const ent=await env.DB.prepare('SELECT * FROM entitlements WHERE order_id=? AND product_id=?').bind(o.id,cleanText(b.productId,100)).first(); if(!ent)return json({ok:false,error:'No download entitlement found.'},404); if(ent.downloads_used>=ent.downloads_max)return json({ok:false,error:'Download limit reached.'},429); const raw=bytesToB64(crypto.getRandomValues(new Uint8Array(32))).replace(/[+/=]/g,''), th=await sha(raw), exp=new Date(Date.now()+15*60*1000).toISOString(); await env.DB.prepare('INSERT INTO download_tokens(token_hash,entitlement_id,expires_at) VALUES(?,?,?)').bind(th,ent.id,exp).run(); return json({ok:true,url:`/api/downloads/file?token=${encodeURIComponent(raw)}`,expiresAt:exp});
+    const b=await body(req), tokenAccess=await receiptAccess(env,String(b.receiptToken||'')), customer=await customerAuth(req,env), o=await env.DB.prepare(`SELECT id,customer_email,status FROM orders WHERE public_id=? AND status IN ('paid','partially_refunded')`).bind(cleanText(b.publicId,100)).first(); if(!o)return json({ok:false,error:'Purchase could not be verified.'},403); const tokenOwner=tokenAccess?.order_id===o.id, sessionOwner=customer&&customer.email.toLowerCase()===o.customer_email.toLowerCase(); if(!tokenOwner&&!sessionOwner)return json({ok:false,error:'Purchase could not be verified.'},403); const ent=await env.DB.prepare('SELECT * FROM entitlements WHERE order_id=? AND product_id=?').bind(o.id,cleanText(b.productId,100)).first(); if(!ent)return json({ok:false,error:'No download entitlement found.'},404); if(ent.downloads_used>=ent.downloads_max)return json({ok:false,error:'Download limit reached.'},429); const raw=bytesToB64(crypto.getRandomValues(new Uint8Array(32))).replace(/[+/=]/g,''), th=await sha(raw), exp=new Date(Date.now()+15*60*1000).toISOString(); await env.DB.prepare('INSERT INTO download_tokens(token_hash,entitlement_id,expires_at) VALUES(?,?,?)').bind(th,ent.id,exp).run(); await securityEvent(req,env,'download_authorized',{targetId:ent.id,reason:tokenOwner?'receipt_token':'customer_session'}); return json({ok:true,url:`/api/downloads/file?token=${encodeURIComponent(raw)}`,expiresAt:exp});
   }
   if(p==='downloads/file'&&method==='GET'){
     const raw=url.searchParams.get('token')||'', th=await sha(raw), tok=await env.DB.prepare(`SELECT dt.*,e.product_id,e.downloads_used,e.downloads_max FROM download_tokens dt JOIN entitlements e ON e.id=dt.entitlement_id WHERE dt.token_hash=?`).bind(th).first(); if(!tok||tok.used_at||new Date(tok.expires_at)<=new Date())return new Response('Download link expired or invalid.',{status:410}); const pr=contentRow(await env.DB.prepare(`SELECT * FROM content_items WHERE id=? AND type='product'`).bind(tok.product_id).first()); if(!pr)return new Response('Product not found.',{status:404});
     let stored=null,downloadName=cleanText(pr.data.downloadFilename||'',180)||`${pr.slug||'download'}.zip`;
     if(pr.data.mediaObjectId){const row=await env.DB.prepare('SELECT * FROM media_objects WHERE id=?').bind(cleanText(pr.data.mediaObjectId,100)).first();if(row){stored=await getStoredObject(env,row);downloadName=cleanText(pr.data.downloadFilename||row.filename,180)||downloadName;}}
     if(!stored&&pr.data.dropboxPath){const cfg=await dropboxConfig(env);if(cfg?.accessToken){const dr=await fetch('https://content.dropboxapi.com/2/files/download',{method:'POST',headers:{authorization:`Bearer ${cfg.accessToken}`,'Dropbox-API-Arg':JSON.stringify({path:pr.data.dropboxPath})}});if(dr.ok)stored={body:dr.body,contentType:dr.headers.get('content-type')||'application/zip'};}}
-    if(!stored)return new Response('Digital file storage is not configured or the file is unavailable.',{status:503});
-    await env.DB.batch([env.DB.prepare('UPDATE download_tokens SET used_at=? WHERE token_hash=?').bind(now(),th),env.DB.prepare('UPDATE entitlements SET downloads_used=downloads_used+1 WHERE id=?').bind(tok.entitlement_id),env.DB.prepare(`INSERT OR IGNORE INTO analytics(event_type,object_type,object_id,visitor_hash,bucket,value,created_at) VALUES('download','product',?,?,?,1,?)`).bind(pr.id,await visitorHash(req),th.slice(0,40),now())]);
+    if(!stored)return new Response('Digital file storage is not configured or the file is unavailable.',{status:503}); const claimed=await env.DB.prepare('UPDATE download_tokens SET used_at=? WHERE token_hash=? AND used_at IS NULL AND expires_at>?').bind(now(),th,now()).run(); if(Number(claimed?.meta?.changes||0)!==1)return new Response('Download link expired or invalid.',{status:410});
+    await env.DB.batch([env.DB.prepare('UPDATE entitlements SET downloads_used=downloads_used+1 WHERE id=?').bind(tok.entitlement_id),env.DB.prepare(`INSERT OR IGNORE INTO analytics(event_type,object_type,object_id,visitor_hash,bucket,value,created_at) VALUES('download','product',?,?,?,1,?)`).bind(pr.id,await visitorHash(req),th.slice(0,40),now())]); await securityEvent(req,env,'download_consumed',{targetId:tok.entitlement_id});
     const hh=new Headers({'content-type':stored.contentType||'application/octet-stream','content-disposition':`attachment; filename="${safeFileName(downloadName)}"`,'cache-control':'no-store'}); return new Response(stored.body,{status:200,headers:hh});
   }
 
@@ -610,9 +645,9 @@ export async function route(req,env,url,ctx){
   }
   if(p==='admin/media/upload'&&method==='POST'){
     if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403);
-    const name=safeFileName(req.headers.get('x-file-name')||'upload.bin'),contentType=normalizeMediaContentType(req.headers.get('x-content-type')||req.headers.get('content-type')||'application/octet-stream',name),visibility=req.headers.get('x-visibility')==='public'?'public':'private',folder=cleanSlug(req.headers.get('x-folder')||'media'),registerLibrary=req.headers.get('x-register-library')==='1',ab=await req.arrayBuffer(),limit=Math.max(1024*1024,Number(env.MAX_UPLOAD_BYTES)||95*1024*1024);
+    const name=safeFileName(req.headers.get('x-file-name')||'upload.bin'),contentType=normalizeMediaContentType(req.headers.get('x-content-type')||req.headers.get('content-type')||'application/octet-stream',name),visibility=req.headers.get('x-visibility')==='public'?'public':'private',folder=cleanSlug(req.headers.get('x-folder')||'media'),registerLibrary=req.headers.get('x-register-library')==='1',limit=Math.max(1024*1024,Number(env.MAX_UPLOAD_BYTES)||95*1024*1024),declaredLength=Number(req.headers.get('content-length')||0); if(declaredLength>limit)return json({ok:false,error:'Upload exceeds this installation profile limit.'},413); let ab;try{ab=await readLimitedBody(req,limit)}catch(err){if(err.code==='PAYLOAD_TOO_LARGE')return json({ok:false,error:'Upload exceeds this installation profile limit.'},413);throw err}
     if(!ab.byteLength)return json({ok:false,error:'Upload is empty.'},400);
-    if(ab.byteLength>limit)return json({ok:false,error:`Upload exceeds this installation profile limit (${Math.round(limit/1024/1024)} MB). Use smaller MP3 packages, R2 multipart in a future release, or the VPS profile for larger masters.`},413);
+    if(!mediaBytesMatch(contentType,ab,name))return json({ok:false,error:'The uploaded file does not match its declared media type.'},415);
     if(visibility==='public'&&!publicMediaAllowed(contentType,name))return json({ok:false,error:'That file type cannot be served as public media. Use JPG, PNG, WebP, GIF, audio, video, PDF or TXT; protected release ZIPs remain private.'},415);
     const out=await putStoredObject(env,{bytes:ab,filename:name,contentType,visibility,folder});
     if(registerLibrary){const storedRow=await env.DB.prepare('SELECT * FROM media_objects WHERE id=?').bind(out.id).first();if(storedRow)await upsertMediaMeta(env,storedRow,{title:name.replace(/\.[^.]+$/,''),alt:''});}
@@ -684,8 +719,7 @@ export async function route(req,env,url,ctx){
     const b=await body(req), type=cleanText(b.type,40), title=cleanText(b.title,250).trim();
     if(!ALLOWED_TYPES.has(type))return json({ok:false,error:'Invalid content type.'},400);
     if(!title)return json({ok:false,error:'Title is required.'},400);
-    const itemId=id(), t=now(), data={...(b.data||{})};
-    if(type==='page')data.html=sanitizeHtml(data.html||'');
+    const itemId=id(), t=now(), data=sanitizeContentData(type,b.data||{});
     if(type==='video'){
       const yid=youtubeIdFromUrl(data.youtubeUrl);
       if(!yid)return json({ok:false,error:'Invalid YouTube URL.'},400);
@@ -713,9 +747,8 @@ export async function route(req,env,url,ctx){
     if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403);
     const existing=contentRow(await env.DB.prepare('SELECT * FROM content_items WHERE id=?').bind(cId[1]).first());
     if(!existing)return json({ok:false,error:'Content item not found.'},404);
-    const b=await body(req), title=cleanText(b.title??existing.title,250).trim(), data={...(b.data??existing.data)};
+    const b=await body(req), title=cleanText(b.title??existing.title,250).trim(), data=sanitizeContentData(existing.type,b.data??existing.data);
     if(!title)return json({ok:false,error:'Title is required.'},400);
-    if(existing.type==='page')data.html=sanitizeHtml(data.html||'');
     if(existing.type==='video'){
       const yid=youtubeIdFromUrl(data.youtubeUrl);
       if(!yid)return json({ok:false,error:'Invalid YouTube URL.'},400);
@@ -747,6 +780,6 @@ export async function route(req,env,url,ctx){
 export async function onRequest(context){
   try{
     if(context.request.method==='OPTIONS')return new Response(null,{status:204,headers:{allow:'GET,POST,PUT,DELETE,OPTIONS'}});
-    return await route(context.request,context.env,new URL(context.request.url),context);
-  }catch(err){ console.error('OneArtist API error',err); return json({ok:false,error:'Server error',message:String(err?.message||err)},500); }
+    const response=await route(context.request,context.env,new URL(context.request.url),context),headers=new Headers(response.headers),rid=requestId(context.request); headers.set('x-request-id',rid); headers.set('x-content-type-options','nosniff'); headers.set('referrer-policy','strict-origin-when-cross-origin'); headers.set('permissions-policy','camera=(), microphone=(), geolocation=()'); return new Response(response.body,{status:response.status,statusText:response.statusText,headers});
+  }catch(err){ const rid=requestId(context.request); console.error('OneArtist API error',rid,err); return json({ok:false,error:'Internal server error',requestId:rid},500,{'x-request-id':rid,'x-content-type-options':'nosniff','referrer-policy':'strict-origin-when-cross-origin'}); }
 }
