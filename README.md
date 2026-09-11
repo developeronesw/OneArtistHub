@@ -1,9 +1,9 @@
-# OneArtist Hub 0.3.0 — Media Library & Universal Asset Picker
+# OneArtist Hub 0.4.0 - Security-Hardened Release Candidate
 
 **Official admin design:** Aurora Glass Studio  
 **Public themes:** Midnight Cinema, Artist OS, Neon Editorial
 
-OneArtist Hub is a responsive artist CMS, storefront, continuous music player and portable JavaScript backend. **Cloudflare Pages + Pages Functions + D1** remains the recommended serverless profile, while the same application also supports a **Node.js + MySQL/MariaDB + NGINX** self-hosted/VPS profile. PHP is not required. Version 0.3.0 rebuilds all three public themes as distinct mockup-locked visual systems while preserving the provider-backed Media Library and reusable asset picker.
+OneArtist Hub is a responsive artist CMS, storefront, continuous music player and portable JavaScript backend. **Cloudflare Pages + Pages Functions + D1** remains the recommended serverless profile, while the same application also supports a **Node.js + MySQL/MariaDB + NGINX** self-hosted/VPS profile. PHP is not required. Version 0.4.0 hardens authentication, receipts, downloads, uploads, album ingest, content URLs, PayPal validation, diagnostics and security event logging while preserving the mockup-locked public themes and existing data model.
 
 ## What is functional in this build
 
@@ -135,7 +135,9 @@ OneArtist Hub supports **Resend** and **Cloudflare Email Service** from **Settin
 
 ## Version
 
-0.2.2 Media Library & Universal Asset Picker — September 10, 2026
+0.4.0 Security-Hardened Release Candidate - September 11, 2026
+
+Local and source-level verification is complete. Cloudflare Pages/D1, self-hosted MySQL/MariaDB runtime, and PayPal sandbox verification remain blocked pending environment access. See `docs/RELEASE-QA-0.4.0.md`.
 
 
 ## 0.2.2 provider support

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.0 Release Candidate - Security Hardening - 2026-09-11
+
+- Added scoped, expiring, hashed receipt access tokens and minimized public receipt data.
+- Required customer-session or receipt-token authorization for receipt download requests.
+- Made one-time download-token consumption atomic to prevent replay races.
+- Added database-backed login throttling, failed-attempt tracking, emergency recovery backoff, and security event logging.
+- Hardened upload request limits, media magic-byte checks, album ZIP resource limits, dangerous URL schemes, HTML sanitization, and production error responses.
+- Added PayPal webhook certificate-host, capture amount/currency, refund balance/currency, and verification-failure safeguards.
+- Fixed MySQL migration execution and added portable receipt, login-attempt, and security-event tables for D1, SQLite, MySQL and MariaDB paths.
+- Added compatible Pages/self-host security headers and focused security regression tests.
+- Verification status: local/source tests passed; live Cloudflare/D1, MySQL/MariaDB runtime, and PayPal sandbox checks remain blocked pending environment access.
+
 ## 0.3.0 HF1 — Theme-Safe Player Geometry — 2026-09-10
 
 - Locked the persistent glass music player to one global viewport position and width contract across every public theme.

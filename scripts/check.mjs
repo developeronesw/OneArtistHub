@@ -38,7 +38,7 @@ if(!/auth\/forgot-password/.test(api)||!/auth\/reset-password/.test(api)||!/pass
 if(!/admin\/notifications/.test(api)||!/notification_preferences/.test(api)||!/notification-popover/.test(css)){console.error('FAIL D1 notifications center');fail=true}else console.log('PASS D1 notifications center');
 if(!/api.resend.com\/emails/.test(api)||!/admin\/email\/test/.test(api)||!/Email & Sales Notifications/.test(app)){console.error('FAIL transactional email integration');fail=true}else console.log('PASS transactional email integration');
 if(!/MIGRATION_012/.test(api)||!/ensureUpgrade012/.test(api)){console.error('FAIL automatic 0.1.2 migration');fail=true}else console.log('PASS automatic 0.1.2 migration');
-if(!/version:'0.3.0'/.test(api)||pkg.version!=='0.3.0'){console.error('FAIL 0.3.0 version markers');fail=true}else console.log('PASS 0.3.0 version markers');
+if(!/version:'0.4.0'/.test(api)||pkg.version!=='0.4.0'){console.error('FAIL 0.4.0 version markers');fail=true}else console.log('PASS 0.4.0 version markers');
 
 
 if(!/customer\/magic-link/.test(api)||!/customer\/orders/.test(api)||!/customer\/download/.test(api)||!/function CustomerAccount\(/.test(app)){console.error('FAIL passwordless customer account flow');fail=true}else console.log('PASS passwordless customer account flow');

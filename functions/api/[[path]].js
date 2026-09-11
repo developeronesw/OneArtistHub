@@ -423,7 +423,7 @@ export async function route(req,env,url,ctx){
   const p=url.pathname.replace(/^\/api\/?/,'').replace(/\/$/,'');
   const method=req.method.toUpperCase();
   const installed=await isInstalled(env); if(installed){await ensureUpgrade012(env);await ensureUpgrade013(env);await ensureUpgrade020(env);await ensureUpgrade022(env);await ensureUpgrade023(env);if(ctx?.waitUntil)ctx.waitUntil(processEmailQueue(env,3));}
-  if(p==='status' && method==='GET') return json({ok:true,installed,version:'0.3.0'});
+  if(p==='status' && method==='GET') return json({ok:true,installed,version:'0.4.0'});
   if(p==='setup' && method==='POST'){
     if(await isInstalled(env)) return json({ok:false,error:'OneArtist Hub is already installed.'},409);
     const b=await body(req); if(!env.ONEARTIST_SETUP_KEY || b.setupKey!==env.ONEARTIST_SETUP_KEY) return json({ok:false,error:'Invalid setup key.'},403);
