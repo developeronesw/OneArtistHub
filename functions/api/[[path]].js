@@ -169,20 +169,20 @@ async function getStoredObject(env,row){
 function mediaTypeFor(contentType='',filename=''){
   const c=String(contentType||'').toLowerCase(),f=String(filename||'').toLowerCase();
   if(c.startsWith('image/')||/\.(jpe?g|png|webp|gif)$/i.test(f))return 'image';
-  if(c.startsWith('audio/')||/\.(mp3|wav|m4a|aac|ogg|flac)$/i.test(f))return 'audio';
+  if(c.startsWith('audio/')||/\.(mp3|wav|aif|aiff|m4a|aac|ogg|oga|opus|flac)$/i.test(f))return 'audio';
   if(c.startsWith('video/')||/\.(mp4|webm|mov|m4v)$/i.test(f))return 'video';
   return 'document';
 }
 function normalizeMediaContentType(contentType='',filename=''){
   const c=cleanText(contentType,160).toLowerCase().split(';')[0].trim();if(c&&c!=='application/octet-stream')return c;
-  const f=String(filename||'').toLowerCase(),map={'.jpg':'image/jpeg','.jpeg':'image/jpeg','.png':'image/png','.webp':'image/webp','.gif':'image/gif','.mp3':'audio/mpeg','.wav':'audio/wav','.m4a':'audio/mp4','.aac':'audio/aac','.ogg':'audio/ogg','.flac':'audio/flac','.mp4':'video/mp4','.webm':'video/webm','.mov':'video/quicktime','.m4v':'video/x-m4v','.pdf':'application/pdf','.txt':'text/plain','.zip':'application/zip'};
+  const f=String(filename||'').toLowerCase(),map={'.jpg':'image/jpeg','.jpeg':'image/jpeg','.png':'image/png','.webp':'image/webp','.gif':'image/gif','.mp3':'audio/mpeg','.wav':'audio/wav','.aif':'audio/aiff','.aiff':'audio/aiff','.m4a':'audio/mp4','.aac':'audio/aac','.ogg':'audio/ogg','.oga':'audio/ogg','.opus':'audio/opus','.flac':'audio/flac','.mp4':'video/mp4','.webm':'video/webm','.mov':'video/quicktime','.m4v':'video/x-m4v','.pdf':'application/pdf','.txt':'text/plain','.zip':'application/zip'};
   const ext=Object.keys(map).find(x=>f.endsWith(x));return ext?map[ext]:(c||'application/octet-stream');
 }
 function publicMediaAllowed(contentType='',filename=''){
   const c=String(contentType||'').toLowerCase(),f=String(filename||'').toLowerCase();
   return c.startsWith('image/jpeg')||c.startsWith('image/png')||c.startsWith('image/webp')||c.startsWith('image/gif')||
     c.startsWith('audio/')||c.startsWith('video/')||c==='application/pdf'||c==='text/plain'||
-    /\.(jpe?g|png|webp|gif|mp3|wav|m4a|aac|ogg|flac|mp4|webm|mov|m4v|pdf|txt)$/i.test(f);
+    /\.(jpe?g|png|webp|gif|mp3|wav|aif|aiff|m4a|aac|ogg|oga|opus|flac|mp4|webm|mov|m4v|pdf|txt)$/i.test(f);
 }
 function mediaBytesMatch(contentType,bytes,filename=''){
   const b=bytes instanceof Uint8Array?bytes:new Uint8Array(bytes), c=String(contentType||'').toLowerCase(), f=String(filename||'').toLowerCase();

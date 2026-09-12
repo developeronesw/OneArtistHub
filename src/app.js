@@ -100,6 +100,16 @@ function assetUrl(asset){return asset?.url||''}
 function prettyBytes(n){const v=Number(n)||0;if(v<1024)return `${v} B`;if(v<1024*1024)return `${(v/1024).toFixed(1)} KB`;if(v<1024*1024*1024)return `${(v/1024/1024).toFixed(1)} MB`;return `${(v/1024/1024/1024).toFixed(1)} GB`}
 function mediaIcon(kind){return kind==='image'?'image':kind==='audio'?'music':kind==='video'?'video':'pages'}
 
+function mediaAccept(kind='image'){
+  if(kind==='image')return 'image/jpeg,image/png,image/webp,image/gif';
+  if(kind==='audio')return 'audio/mpeg,audio/wav,audio/aiff,audio/x-aiff,audio/ogg,audio/opus,audio/flac,audio/mp4,audio/aac,.mp3,.wav,.aif,.aiff,.ogg,.flac,.m4a,.aac';
+  if(kind==='video')return 'video/mp4,video/webm,video/quicktime,video/x-m4v';
+  return '*/*';
+}
+function audioTitle(name='Audio Track'){
+  return String(name).replace(/\.[^.]+$/,'').replace(/^\s*\d{1,3}[\s._-]+/,'').trim()||'Untitled Track';
+}
+
 function AssetPicker({onSelect,onClose,show,kind='image'}){
   const [items,setItems]=useState([]),[loading,setLoading]=useState(true),[uploading,setUploading]=useState(false),[query,setQuery]=useState('');
   const load=useCallback(()=>{
@@ -134,7 +144,7 @@ function AssetPicker({onSelect,onClose,show,kind='image'}){
       h('div',{className:'modal-body'},
         h('div',{className:'media-picker-toolbar'},
           h('div',{className:'search media-search'},h(Icon,{name:'search'}),h(Input,{value:query,onChange:e=>setQuery(e.target.value),placeholder:'Search media…'})),
-          h('label',{className:'btn primary file-button'},h(Icon,{name:'upload'}),uploading?'Uploading…':'Upload New',h('input',{type:'file',accept:kind==='image'?'image/jpeg,image/png,image/webp,image/gif':'*/*',multiple:true,hidden:true,disabled:uploading,onChange:e=>{upload(e.target.files);e.target.value=''}}))
+          h('label',{className:'btn primary file-button'},h(Icon,{name:'upload'}),uploading?'Uploading…':'Upload New',h('input',{type:'file',accept:mediaAccept(kind),multiple:true,hidden:true,disabled:uploading,onChange:e=>{upload(e.target.files);e.target.value=''}}))
         ),
         loading?h('div',{className:'empty'},'Loading media…'):grid
       )
@@ -146,8 +156,43 @@ function AssetField({label,value,onChange,show,folder='images',kind='image',plac
   const [picker,setPicker]=useState(false),[uploading,setUploading]=useState(false);
   async function upload(file){if(!file)return;setUploading(true);try{const obj=await uploadMediaFile(file,{visibility:'public',folder,registerLibrary:true});onChange(obj.url);show?.(`${file.name} uploaded to the Media Library.`)}catch(e){show?.(e.message,true)}finally{setUploading(false)}}
   return h(React.Fragment,null,
-    h(Field,{label},h('div',{className:'asset-field'},value&&kind==='image'&&h('div',{className:'asset-preview'},h('img',{src:value,alt:''})),h('div',{className:'asset-field-main'},h(Input,{value:value||'',onChange:e=>onChange(e.target.value),placeholder}),h('div',{className:'row wrap'},h(Button,{type:'button',className:'compact',icon:'image',onClick:()=>setPicker(true)},'Media Library'),h('label',{className:'btn compact file-button'},h(Icon,{name:'upload'}),uploading?'Uploading…':'Upload',h('input',{type:'file',accept:kind==='image'?'image/jpeg,image/png,image/webp,image/gif':'*/*',hidden:true,disabled:uploading,onChange:e=>{upload(e.target.files?.[0]);e.target.value=''}})),value&&h(Button,{type:'button',className:'compact',icon:'close',onClick:()=>onChange('')},'Clear'))))),
+    h(Field,{label},h('div',{className:'asset-field'},value&&kind==='image'&&h('div',{className:'asset-preview'},h('img',{src:value,alt:''})),value&&kind==='audio'&&h('div',{className:'asset-preview audio-asset-preview'},h(Icon,{name:'music',size:26}),h('audio',{controls:true,preload:'metadata',src:value})),h('div',{className:'asset-field-main'},h(Input,{value:value||'',onChange:e=>onChange(e.target.value),placeholder}),h('div',{className:'row wrap'},h(Button,{type:'button',className:'compact',icon:kind==='audio'?'music':kind==='video'?'video':'image',onClick:()=>setPicker(true)},'Media Library'),h('label',{className:'btn compact file-button'},h(Icon,{name:'upload'}),uploading?'Uploading…':'Upload',h('input',{type:'file',accept:mediaAccept(kind),hidden:true,disabled:uploading,onChange:e=>{upload(e.target.files?.[0]);e.target.value=''}})),value&&h(Button,{type:'button',className:'compact',icon:'close',onClick:()=>onChange('')},'Clear'))))),
     picker&&h(AssetPicker,{kind,onClose:()=>setPicker(false),show,onSelect:a=>{onChange(assetUrl(a));setPicker(false)}})
+  );
+}
+
+function AudioAssetListField({label='Release audio tracks',value=[],onChange,show}){
+  const [picker,setPicker]=useState(false),[uploading,setUploading]=useState(false);
+  const assets=Array.isArray(value)?value:[];
+  async function upload(files){
+    const list=[...(files||[])];if(!list.length)return;
+    setUploading(true);
+    try{
+      const next=[...assets];
+      for(const file of list){
+        const obj=await uploadMediaFile(file,{visibility:'public',folder:'audio',registerLibrary:true});
+        next.push({id:obj.id,url:obj.url,filename:obj.filename||file.name,title:audioTitle(obj.filename||file.name),contentType:obj.contentType||file.type||'',duration:0});
+      }
+      onChange(next);show?.(`${list.length} audio file${list.length===1?'':'s'} uploaded to the Media Library.`);
+    }catch(e){show?.(e.message,true)}finally{setUploading(false)}
+  }
+  function add(asset){
+    if(!asset?.url)return;
+    if(assets.some(x=>x.id===asset.id))return show?.('That audio file is already attached to this release.',true);
+    onChange([...assets,{id:asset.id,url:asset.url,filename:asset.filename,title:asset.title||audioTitle(asset.filename),contentType:asset.contentType||'',duration:0}]);
+    setPicker(false);
+  }
+  return h(React.Fragment,null,
+    h(Field,{label},h('div',{className:'audio-asset-field'},
+      h('div',{className:'row between wrap'},h('div',null,h('strong',null,'Audio source'),h('div',{className:'small muted'},'Upload MP3, WAV, AIFF or OGG files, or select audio already in your Media Library. Every new upload is registered there automatically.')),
+        h('div',{className:'row wrap'},
+          h(Button,{type:'button',className:'compact',icon:'music',onClick:()=>setPicker(true)},'Media Library'),
+          h('label',{className:'btn compact primary file-button'},h(Icon,{name:'upload'}),uploading?'Uploading…':'Upload Audio',h('input',{type:'file',accept:mediaAccept('audio'),multiple:true,hidden:true,disabled:uploading,onChange:e=>{upload(e.target.files);e.target.value=''}}))
+        )
+      ),
+      assets.length?h('div',{className:'audio-asset-list'},assets.map((a,i)=>h('div',{className:'audio-asset-row card',key:a.id||`${a.url}-${i}`},h('div',{className:'audio-asset-icon'},h(Icon,{name:'music'})),h('div',{className:'audio-asset-info'},h('strong',null,a.title||audioTitle(a.filename)),h('span',{className:'small muted'},a.filename||a.url)),h(Button,{type:'button',className:'compact',icon:'close',onClick:()=>onChange(assets.filter((_,n)=>n!==i))},'Remove')))):h('div',{className:'empty audio-asset-empty'},h(Icon,{name:'music',size:28}),h('span',null,'No audio tracks attached yet.'))
+    )),
+    picker&&h(AssetPicker,{kind:'audio',show,onClose:()=>setPicker(false),onSelect:add})
   );
 }
 
@@ -258,7 +303,7 @@ function normalizeVariants(value){
 function blankFor(type){
   const base={type,title:'',slug:'',status:'published',sortDate:today(),featured:false,data:{}};
   const data={
-    release:{releaseType:'Album',price:'',cover:'',description:'',genre:'',catalogNo:'',spotifyUrl:'',appleMusicUrl:'',youtubeMusicUrl:''},
+    release:{releaseType:'Album',price:'',cover:'',description:'',genre:'',catalogNo:'',spotifyUrl:'',appleMusicUrl:'',youtubeMusicUrl:'',trackAssets:[]},
     track:{releaseId:'',trackNo:1,audio:'',cover:'',duration:'',price:'',explicit:false},
     video:{youtubeUrl:'',youtubeId:'',thumbnail:'',description:''},
     tour:{venue:'',ticketUrl:'',status:'Tickets Available',doors:'',city:'',region:'',country:'United States'},
@@ -481,13 +526,24 @@ function ContentEditor({item,type,onClose,onSaved}){
     e.preventDefault(); setBusy(true);
     try{
       const payload={...form,type,sortDate:form.sortDate||form.sort_date||'',slug:form.slug||'',featured:!!form.featured,data:{...(form.data||{})}};
+      const releaseTrackAssets=type==='release'&&Array.isArray(payload.data.trackAssets)?payload.data.trackAssets:[];
+      if(type==='release')delete payload.data.trackAssets;
       if(type==='video'){payload.data.youtubeId=youtubeIdFromUrl(payload.data.youtubeUrl);if(!payload.data.youtubeId)throw new Error('Enter a valid YouTube URL.');if(!payload.data.thumbnail)payload.data.thumbnail=`https://img.youtube.com/vi/${payload.data.youtubeId}/hqdefault.jpg`}
       if(type==='track'&&!payload.data.releaseId)throw new Error('Choose the release this track belongs to.');
       if(type==='track'&&!payload.data.audio)throw new Error('Preview audio URL is required.');
       if(type==='tour'&&!payload.data.venue)throw new Error('Venue is required.');
       if(type==='product'&&payload.data.price==='')throw new Error('Product price is required.');
+      let savedId=form.id;
       if(form.id) await api('admin/content/'+form.id,{method:'PUT',body:JSON.stringify(payload)});
-      else await api('admin/content',{method:'POST',body:JSON.stringify(payload)});
+      else { const created=await api('admin/content',{method:'POST',body:JSON.stringify(payload)}); savedId=created.id; }
+      if(type==='release'&&releaseTrackAssets.length){
+        const existing=await api('admin/content?type=track');
+        const current=(existing.items||[]).filter(t=>t.data?.releaseId===savedId).length;
+        for(let i=0;i<releaseTrackAssets.length;i++){
+          const a=releaseTrackAssets[i];
+          await api('admin/content',{method:'POST',body:JSON.stringify({type:'track',title:a.title||audioTitle(a.filename),status:form.status||'published',sortDate:form.sortDate||form.sort_date||'',featured:false,data:{releaseId:savedId,trackNo:current+i+1,audio:a.url,audioObjectId:a.id||'',cover:payload.data.cover||'',duration:Number(a.duration)||0,price:'',explicit:false}})});
+        }
+      }
       await onSaved();
     }catch(err){show(err.message,true)} finally{setBusy(false)}
   }
@@ -510,11 +566,12 @@ function TypeFields({type,data,setData,releases=[],onFetchYouTube,youtubeBusy=fa
     h('div',{className:'grid3'},h(Field,{label:'Release type'},h(Select,{value:data.releaseType||'Album',onChange:e=>setData('releaseType',e.target.value)},['Album','EP','Single','Mixtape','Compilation'].map(v=>h('option',{key:v},v)))),h(Field,{label:'Genre'},h(Input,{value:data.genre||'',onChange:e=>setData('genre',e.target.value)})),h(Field,{label:'Price (optional)'},h(Input,{type:'number',min:0,step:'.01',value:data.price??'',onChange:e=>setData('price',e.target.value)}))),
     h('div',{className:'grid2'},h(AssetField,{label:'Cover artwork',value:data.cover||'',onChange:v=>setData('cover',v),show,folder:'covers',kind:'image',placeholder:'Choose from Media Library, upload, or paste URL'}),h(Field,{label:'Catalog / UPC (optional)'},h(Input,{value:data.catalogNo||'',onChange:e=>setData('catalogNo',e.target.value)}))),
     h(Field,{label:'Description'},h(Textarea,{value:data.description||'',onChange:e=>setData('description',e.target.value)})),
-    h('div',{className:'grid3'},h(Field,{label:'Spotify URL'},h(Input,{value:data.spotifyUrl||'',onChange:e=>setData('spotifyUrl',e.target.value)})),h(Field,{label:'Apple Music URL'},h(Input,{value:data.appleMusicUrl||'',onChange:e=>setData('appleMusicUrl',e.target.value)})),h(Field,{label:'YouTube Music URL'},h(Input,{value:data.youtubeMusicUrl||'',onChange:e=>setData('youtubeMusicUrl',e.target.value)})))
+    h('div',{className:'grid3'},h(Field,{label:'Spotify URL'},h(Input,{value:data.spotifyUrl||'',onChange:e=>setData('spotifyUrl',e.target.value)})),h(Field,{label:'Apple Music URL'},h(Input,{value:data.appleMusicUrl||'',onChange:e=>setData('appleMusicUrl',e.target.value)})),h(Field,{label:'YouTube Music URL'},h(Input,{value:data.youtubeMusicUrl||'',onChange:e=>setData('youtubeMusicUrl',e.target.value)}))),
+    h(AudioAssetListField,{label:'Release audio',value:data.trackAssets||[],onChange:v=>setData('trackAssets',v),show})
   );
   if(type==='track')return h(React.Fragment,null,
     h('div',{className:'grid2'},h(Field,{label:'Release'},h(Select,{required:true,value:data.releaseId||'',onChange:e=>setData('releaseId',e.target.value)},h('option',{value:''},'Choose release…'),releases.map(r=>h('option',{key:r.id,value:r.id},r.title)))),h(Field,{label:'Track number'},h(Input,{type:'number',min:1,value:data.trackNo||1,onChange:e=>setData('trackNo',Math.max(1,Number(e.target.value)||1))}))),
-    h(Field,{label:'Preview audio URL'},h(Input,{required:true,value:data.audio||'',onChange:e=>setData('audio',e.target.value),placeholder:'/demo/higher-ground.wav or https://…'})),
+    h(AssetField,{label:'Audio source',value:data.audio||'',onChange:v=>setData('audio',v),show,folder:'audio',kind:'audio',placeholder:'Select from Media Library, upload, or paste URL'}),
     h('div',{className:'grid3'},h(AssetField,{label:'Track artwork',value:data.cover||'',onChange:v=>setData('cover',v),show,folder:'covers',kind:'image'}),h(Field,{label:'Duration seconds'},h(Input,{type:'number',min:0,value:data.duration||'',onChange:e=>setData('duration',Number(e.target.value)||0)})),h(Field,{label:'Track price (optional)'},h(Input,{type:'number',min:0,step:'.01',value:data.price??'',onChange:e=>setData('price',e.target.value)}))),
     h('label',{className:'row small'},h('input',{type:'checkbox',checked:!!data.explicit,onChange:e=>setData('explicit',e.target.checked)}),'Explicit content')
   );

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0 Audio Source / Media Library Hotfix - 2026-09-12
+
+- Added real audio source controls to **New Track**: upload or select an existing Media Library asset.
+- Added multi-audio source controls to **New Release**: upload or select multiple tracks, then automatically create the release's track records on save.
+- New audio uploads are registered in the central Media Library immediately.
+- Added MP3, WAV, AIFF/AIF, OGG/OGA, Opus, FLAC, M4A and AAC file filtering/extension MIME normalization where applicable.
+- Added an inline audio preview to track audio source fields.
+- Preserved the existing protected release-package workflow and existing Media Library ownership/deletion rules.
+- Static/source QA and security regression checks pass.
+
+
 ## 0.4.0 Release Candidate - Security Hardening - 2026-09-11
 
 - Added scoped, expiring, hashed receipt access tokens and minimized public receipt data.
