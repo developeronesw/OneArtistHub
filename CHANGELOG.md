@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.1 Release Builder UX Consolidation - 2026-09-12
+
+- Unified Release creation and editing into a single "Release Builder" experience so release details and track management live in one workflow.
+- Kept the underlying release/track data model and API intact: release records, track records, Media Library references, and order metadata continue to work as before.
+- Added inline track creation, editing, reordering, and deletion inside the release form while reusing the existing media/audio source picker and asset upload flow.
+- Preserved existing media deletion protections, provider-backed media logic, and draft/publish behavior.
+
 ## 0.4.0 Audio Source / Media Library Hotfix - 2026-09-12
 
 - Added real audio source controls to **New Track**: upload or select an existing Media Library asset.

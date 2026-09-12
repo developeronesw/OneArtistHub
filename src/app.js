@@ -315,7 +315,11 @@ function blankFor(type){
   return {...base,data:data[type]||{}};
 }
 
-const NAV=[['dashboard','Dashboard','home'],['homepage','Homepage','pages'],['release','Releases','music'],['track','Tracks','music'],['video','Videos','video'],['tour','Tour Dates','calendar'],['product','Store','bag'],['orders','Orders','cart'],['customers','Customers','users'],['downloads','Downloads','download'],['page','Pages','pages'],['media','Media Library','image'],['themes','Themes','palette'],['settings','Settings','settings'],['security','Security','shield']];
+function makeTrackDraft(order=1,releaseStatus='published'){
+  return {id:`draft-track-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,title:'',audio:'',cover:'',duration:'',price:'',explicit:false,status:releaseStatus,trackNo:order,releaseId:''};
+}
+
+const NAV=[['dashboard','Dashboard','home'],['homepage','Homepage','pages'],['release','Releases','music'],['video','Videos','video'],['tour','Tour Dates','calendar'],['product','Store','bag'],['orders','Orders','cart'],['customers','Customers','users'],['downloads','Downloads','download'],['page','Pages','pages'],['media','Media Library','image'],['themes','Themes','palette'],['settings','Settings','settings'],['security','Security','shield']];
 function AdminShell({user,onLogout}){
   const [active,setActive]=useState('dashboard'),[menu,setMenu]=useState(false),[search,setSearch]=useState(''),[createRequest,setCreateRequest]=useState(null),[notifOpen,setNotifOpen]=useState(false),[notifications,setNotifications]=useState([]),[unread,setUnread]=useState(0);const [toast,show]=useToast();
   const select=k=>{setActive(k);setMenu(false);setNotifOpen(false)};
@@ -338,7 +342,8 @@ function AdminShell({user,onLogout}){
 function AdminView({active,search,select,create,createRequest,onCreateHandled,show}){
   if(active==='dashboard')return h(Dashboard,{select,create,show});
   if(active==='media')return h(MediaManager,{search,show});
-  if(['release','track','video','tour','product','page'].includes(active))return h(ContentManager,{type:active,search,show,createRequest,onCreateHandled});
+  if(active==='track')return h(ContentManager,{type:'track',search,show,createRequest,onCreateHandled});
+  if(['release','video','tour','product','page'].includes(active))return h(ContentManager,{type:active,search,show,createRequest,onCreateHandled});
   if(active==='orders')return h(Orders,{show});
   if(active==='customers')return h(Customers,{show});
   if(active==='downloads')return h(DownloadsAdmin,{show});
@@ -483,6 +488,185 @@ function AlbumImporter({onClose,onSaved,show}){
   return h('div',{className:'modal-backdrop album-import-backdrop'},h('div',{className:'modal album-import-modal'},h('div',{className:'modal-head'},h('div',null,h('strong',null,'OneArtist Album Ingest'),h('div',{className:'small muted'},zipFile?zipFile.name:'ZIP → metadata → previews → protected package')),h(IconButton,{icon:'close',label:'Close importer',disabled:busy,onClick:onClose})),h('div',{className:'modal-body'},stage==='pick'?pick:editor)));
 }
 
+function ReleaseBuilder({item,onClose,onSaved,show}){
+  const initial=JSON.parse(JSON.stringify(item||blankFor('release')));
+  const [release,setRelease]=useState(initial);
+  const [tracks,setTracks]=useState([]);
+  const [removed,setRemoved]=useState([]);
+  const [busy,setBusy]=useState(false);
+  const [expanded,setExpanded]=useState({});
+
+  useEffect(()=>{
+    if(release.id){
+      api('admin/content?type=track')
+        .then(d=>{
+          const rows=(d.items||[]).filter(t=>t.data?.releaseId===release.id).sort((a,b)=>(Number(a.data?.trackNo)||0)-(Number(b.data?.trackNo)||0));
+          setTracks(rows.map((t,i)=>({
+            id:t.id,
+            title:t.title||'',
+            status:t.status||release.status||'published',
+            audio:t.data?.audio||'',
+            cover:t.data?.cover||release.data?.cover||'',
+            duration:t.data?.duration??'',
+            price:t.data?.price??'',
+            explicit:!!t.data?.explicit,
+            trackNo:Number(t.data?.trackNo)||i+1,
+            releaseId:t.data?.releaseId||release.id
+          })));
+        })
+        .catch(()=>setTracks([makeTrackDraft(1,release.status||'published')]));
+    } else {
+      setTracks([makeTrackDraft(1,release.status||'published')]);
+    }
+  }, [release.id]);
+
+  function setField(key,val){setRelease(r=>({...r,[key]:val}));}
+  function setData(key,val){setRelease(r=>({...r,data:{...(r.data||{}),[key]:val}}));}
+  function addTrack(){
+    const next=tracks.length;
+    setTracks(prev=>[...prev,makeTrackDraft(prev.length+1,release.status||'published')]);
+    setExpanded(x=>({...x,[String(next)]:true}));
+  }
+  function moveTrack(index,delta){
+    setTracks(prev=>{
+      const next=[...prev];
+      const target=index+delta;
+      if(target<0||target>=next.length)return prev;
+      const item=next.splice(index,1)[0];
+      next.splice(target,0,item);
+      return next.map((track,i)=>({...track,trackNo:i+1}));
+    });
+  }
+  function updateTrack(index,key,val){
+    setTracks(prev=>prev.map((track,i)=>i===index?{...track,[key]:val}:track));
+  }
+  function removeTrack(index){
+    setTracks(prev=>{
+      const current=prev[index];
+      if(current?.id && !String(current.id).startsWith('draft-track-')) setRemoved(ids=>[...ids,current.id]);
+      return prev.filter((_,i)=>i!==index).map((track,i)=>({...track,trackNo:i+1}));
+    });
+  }
+  async function save(e){
+    e.preventDefault();
+    setBusy(true);
+    try{
+      const title=(release.title||'').trim();
+      if(!title)throw new Error('Release title is required.');
+      if(!tracks.length)throw new Error('Add at least one track before saving.');
+      for(let i=0;i<tracks.length;i++){
+        const t=tracks[i];
+        if(!String(t.title||'').trim())throw new Error(`Track ${i+1} needs a title.`);
+        if(!String(t.audio||'').trim())throw new Error(`Track ${i+1} needs an audio source.`);
+      }
+      const payload={
+        ...release,
+        type:'release',
+        title,
+        status:release.status||'published',
+        sortDate:release.sortDate||release.sort_date||today(),
+        featured:!!release.featured,
+        data:{...(release.data||{}),releaseType:(release.data?.releaseType||'Album'),cover:release.data?.cover||'',price:release.data?.price??'',description:release.data?.description||'',genre:release.data?.genre||'',catalogNo:release.data?.catalogNo||'',spotifyUrl:release.data?.spotifyUrl||'',appleMusicUrl:release.data?.appleMusicUrl||'',youtubeMusicUrl:release.data?.youtubeMusicUrl||''}
+      };
+      let savedId=release.id;
+      if(release.id){
+        await api('admin/content/'+release.id,{method:'PUT',body:JSON.stringify(payload)});
+      } else {
+        const created=await api('admin/content',{method:'POST',body:JSON.stringify(payload)});
+        savedId=created.id;
+      }
+      for(const removedId of removed){
+        if(removedId && !String(removedId).startsWith('draft-track-')){
+          try{await api('admin/content/'+removedId,{method:'DELETE'});}catch(err){show(err.message,true)}
+        }
+      }
+      for(let i=0;i<tracks.length;i++){
+        const track=tracks[i];
+        const trackPayload={
+          type:'track',
+          title:(track.title||'').trim(),
+          status:track.status||release.status||'published',
+          sortDate:payload.sortDate,
+          featured:false,
+          data:{
+            releaseId:savedId,
+            trackNo:i+1,
+            audio:(track.audio||'').trim(),
+            cover:track.cover||payload.data.cover||'',
+            duration:Number(track.duration||0),
+            price:String(track.price??''),
+            explicit:!!track.explicit
+          }
+        };
+        if(track.id && !String(track.id).startsWith('draft-track-')){
+          await api('admin/content/'+track.id,{method:'PUT',body:JSON.stringify(trackPayload)});
+        } else {
+          await api('admin/content',{method:'POST',body:JSON.stringify(trackPayload)});
+        }
+      }
+      await onSaved();
+    }catch(err){show(err.message,true)}finally{setBusy(false)}
+  }
+
+  const releaseFields=h('div',{className:'stack'},
+    h('div',{className:'grid2'},
+      h(Field,{label:'Release title'},h(Input,{required:true,value:release.title,onChange:e=>setField('title',e.target.value)})),
+      h(Field,{label:'Artist'},h(Input,{value:release.data?.artist||'',onChange:e=>setData('artist',e.target.value),placeholder:'Artist name'})),
+      h(Field,{label:'Release type'},h(Select,{value:release.data?.releaseType||'Album',onChange:e=>setData('releaseType',e.target.value)},['Album','EP','Single','Mixtape','Compilation'].map(v=>h('option',{key:v,value:v},v)))),
+      h(Field,{label:'Genre'},h(Input,{value:release.data?.genre||'',onChange:e=>setData('genre',e.target.value)})),
+      h(Field,{label:'Release date'},h(Input,{type:'date',value:(release.sortDate||release.sort_date||today()).slice(0,10),onChange:e=>setField('sortDate',e.target.value)})),
+      h(Field,{label:'Status'},h(Select,{value:release.status||'published',onChange:e=>setField('status',e.target.value)},h('option',{value:'published'},'Published'),h('option',{value:'draft'},'Draft'))),
+      h(Field,{label:'Price (optional)'},h(Input,{type:'number',min:0,step:'.01',value:release.data?.price??'',onChange:e=>setData('price',e.target.value)})),
+      h(Field,{label:'Catalog / UPC (optional)'},h(Input,{value:release.data?.catalogNo||'',onChange:e=>setData('catalogNo',e.target.value)}))
+    ),
+    h(Field,{label:'Description'},h(Textarea,{value:release.data?.description||'',onChange:e=>setData('description',e.target.value)})),
+    h('div',{className:'grid3'},
+      h(AssetField,{label:'Cover artwork',value:release.data?.cover||'',onChange:v=>setData('cover',v),show,folder:'covers',kind:'image',placeholder:'Choose from Media Library, upload, or paste URL'}),
+      h(Field,{label:'Spotify URL'},h(Input,{value:release.data?.spotifyUrl||'',onChange:e=>setData('spotifyUrl',e.target.value)})),
+      h(Field,{label:'Apple Music URL'},h(Input,{value:release.data?.appleMusicUrl||'',onChange:e=>setData('appleMusicUrl',e.target.value)}))
+    ),
+    h('div',{className:'grid2'},
+      h(Field,{label:'YouTube Music URL'},h(Input,{value:release.data?.youtubeMusicUrl||'',onChange:e=>setData('youtubeMusicUrl',e.target.value)})),
+      h('label',{className:'row small checkbox-field'},h('input',{type:'checkbox',checked:!!release.featured,onChange:e=>setField('featured',e.target.checked)}),'Feature this release')
+    )
+  );
+
+  const tracksEditor=h('div',{className:'stack'},
+    h('div',{className:'row between wrap'},
+      h('div',null,h('h3',null,'Tracks'),h('div',{className:'small muted'},'Add tracks directly in the release flow.')),
+      h(Button,{type:'button',variant:'primary',icon:'plus',onClick:addTrack},'Add Track')
+    ),
+    tracks.map((track,index)=>h('div',{className:'release-builder-track card',key:track.id||`track-${index}`},
+      h('div',{className:'row between wrap'},
+        h('button',{type:'button',className:'track-collapse-toggle',onClick:()=>setExpanded(x=>({...x,[String(index)]:!(x[String(index)]!==false)}))},h('span',null,`${String(index+1).padStart(2,'0')} ${track.title||'Untitled Track'}`),h(Icon,{name:expanded[String(index)]===false?'plus':'minus'})),
+        h('div',{className:'row'},
+          h(IconButton,{type:'button',icon:'up',label:'Move up',disabled:index===0,onClick:()=>moveTrack(index,-1)}),
+          h(IconButton,{type:'button',icon:'down',label:'Move down',disabled:index===tracks.length-1,onClick:()=>moveTrack(index,1)}),
+          h(IconButton,{type:'button',icon:'trash',label:'Remove track',onClick:()=>removeTrack(index)})
+        )
+      ),
+      expanded[String(index)]!==false&&h('div',{className:'release-builder-panel'},
+        h('div',{className:'grid2'},
+          h(Field,{label:'Track title'},h(Input,{value:track.title,onChange:e=>updateTrack(index,'title',e.target.value)})),
+          h(Field,{label:'Track status'},h(Select,{value:track.status||release.status||'published',onChange:e=>updateTrack(index,'status',e.target.value)},h('option',{value:'published'},'Published'),h('option',{value:'draft'},'Draft')))
+        ),
+        h(AssetField,{label:'Audio source',value:track.audio||'',onChange:v=>updateTrack(index,'audio',v),show,folder:'audio',kind:'audio',placeholder:'Select from Media Library, upload, or paste URL'}),
+        h('div',{className:'grid3'},
+          h(AssetField,{label:'Track artwork',value:track.cover||'',onChange:v=>updateTrack(index,'cover',v),show,folder:'covers',kind:'image'}),
+          h(Field,{label:'Duration seconds'},h(Input,{type:'number',min:0,value:track.duration ?? '',onChange:e=>updateTrack(index,'duration',e.target.value)})),
+          h(Field,{label:'Track price (optional)'},h(Input,{type:'number',min:0,step:'.01',value:track.price??'',onChange:e=>updateTrack(index,'price',e.target.value)}))
+        ),
+        h('label',{className:'row small checkbox-field'},h('input',{type:'checkbox',checked:!!track.explicit,onChange:e=>updateTrack(index,'explicit',e.target.checked)}),'Explicit content')
+      )
+    ))
+  );
+
+  return h('div',{className:'modal-backdrop'},h('form',{className:'modal editor-modal',onSubmit:save},
+    h('div',{className:'modal-head'},h('div',null,h('strong',null,release.id?'Edit Release':'Create Release'),h('div',{className:'small muted'},'Unified Release Builder: release details and track management in one flow.')),h(IconButton,{type:'button',icon:'close',onClick:onClose})),
+    h('div',{className:'modal-body content-form'},releaseFields,tracksEditor,h('div',{className:'row between wrap editor-foot'},h('span',{className:'small muted'},'Track order is preserved by the release and saved back to each track record.'),h('div',{className:'row'},h(Button,{type:'button',onClick:onClose},'Cancel'),h(Button,{type:'submit',variant:'primary',icon:'save',disabled:busy},busy?'Saving…':release.status==='draft'?'Save Draft':'Save Release'))))
+  ));
+}
+
 function ContentManager({type,search,show,createRequest,onCreateHandled}){
   const meta=TYPE_META[type], [items,setItems]=useState([]),[editing,setEditing]=useState(null),[importing,setImporting]=useState(false),[loading,setLoading]=useState(true),[selected,setSelected]=useState(new Set());
   const load=useCallback(()=>{setLoading(true);return api('admin/content?type='+type).then(d=>setItems(d.items||[])).catch(e=>show(e.message,true)).finally(()=>setLoading(false))},[type,show]);
@@ -497,7 +681,7 @@ function ContentManager({type,search,show,createRequest,onCreateHandled}){
   return h(React.Fragment,null,
     h(PageHead,{title:meta.label,subtitle:`Create, edit, publish and delete ${meta.label.toLowerCase()} without touching code.`,actions:h(React.Fragment,null,selected.size>0&&h(Button,{icon:'trash',onClick:bulkDelete},`Delete ${selected.size}`),type==='release'&&h(Button,{icon:'archive',onClick:()=>setImporting(true)},'Import Album ZIP'),h(Button,{variant:'primary',icon:'plus',onClick:()=>setEditing(blankFor(type))},'Add '+singular))}),
     importing&&h(AlbumImporter,{show,onClose:()=>setImporting(false),onSaved:async()=>{setImporting(false);await load();}}),
-    editing&&h(ContentEditor,{item:editing,type,onClose:()=>setEditing(null),onSaved:async()=>{setEditing(null);await load();show('Saved successfully.')}}),
+    editing&&(type==='release'?h(ReleaseBuilder,{item:editing,show,onClose:()=>setEditing(null),onSaved:async()=>{setEditing(null);await load();show('Saved successfully.')}}):h(ContentEditor,{item:editing,type,onClose:()=>setEditing(null),onSaved:async()=>{setEditing(null);await load();show('Saved successfully.')}})),
     h('div',{className:'card table-wrap'},loading?h('div',{className:'empty'},'Loading…'):filtered.length?h('table',{className:'table crud-table'},
       h('thead',null,h('tr',null,h('th',null,''),h('th',null,'Title'),h('th',null,'Status'),h('th',null,'Date'),h('th',null,'Homepage'),h('th',null,'Actions'))),
       h('tbody',null,filtered.map(x=>h('tr',{key:x.id},

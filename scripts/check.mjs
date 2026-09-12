@@ -31,6 +31,8 @@ if(!/function Themes\(/.test(app)||!/publicTheme/.test(app)||!/themePreview/.tes
 if(!/admin\/youtube/.test(api)||!/youtubeIdFromUrl/.test(api)||!/Fetch YouTube/.test(app)){console.error('FAIL YouTube CRUD/thumbnail flow');fail=true}else console.log('PASS YouTube CRUD/thumbnail flow');
 if(!/bulkDelete/.test(app)||!/toggleStatus/.test(app)){console.error('FAIL content bulk/status controls');fail=true}else console.log('PASS content bulk/status controls');
 if(!/create\('release'\)/.test(app)||!/create\('video'\)/.test(app)||!/create\('tour'\)/.test(app)){console.error('FAIL dashboard quick-create actions');fail=true}else console.log('PASS dashboard quick-create actions');
+if(!/function ReleaseBuilder\(/.test(app)||!/Unified Release Builder/.test(app)||!/Add Track/.test(app)){console.error('FAIL unified Release Builder workflow');fail=true}else console.log('PASS unified Release Builder workflow');
+if(/\['release','Releases','music'\]/.test(app)&&!/\['video'/.test(app)){console.error('FAIL release-first nav contract');fail=true}else console.log('PASS release-first nav contract');
 
 if(!/Glass Player|glass-player|player-expanded/.test(app)||!/function Player\(/.test(app)){console.error('FAIL glass SaaS player UI');fail=true}else console.log('PASS glass SaaS player UI');
 if(!/PLAYER GEOMETRY LOCK — 0\.3\.0 HF1/.test(css)||!/\.public \.player-shell\{position:fixed;left:50%;right:auto;bottom:16px;transform:translateX\(-50%\);width:min\(1180px,calc\(100vw - 30px\)\)/.test(css)||/\.public\.os \.glass-player\{[^}]*?(?:left|right|bottom|width|max-width|margin|position|transform)\s*:/.test(css)){console.error('FAIL theme-safe player geometry lock');fail=true}else console.log('PASS theme-safe player geometry lock');
