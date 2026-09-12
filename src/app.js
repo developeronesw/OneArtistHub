@@ -974,13 +974,14 @@ function SecurityPanel({show}){
   )
 }
 
-function Player({tracks,current,setCurrent}){
+function Player({tracks,current,setCurrent,autoStartKey=0}){
   const audio=useRef(null),pendingAuto=useRef(false),counted=useRef(new Set());
   const [playing,setPlaying]=useState(false),[time,setTime]=useState(0),[duration,setDuration]=useState(0),[volume,setVolume]=useState(()=>Number(localStorage.oah_volume??.85)),[shuffle,setShuffle]=useState(false),[repeat,setRepeat]=useState('off'),[expanded,setExpanded]=useState(false),[queueOpen,setQueueOpen]=useState(false),[favorite,setFavorite]=useState(()=>{try{return new Set(JSON.parse(localStorage.oah_favorites||'[]'))}catch{return new Set()}});
   const track=tracks[current]||null;
   useEffect(()=>{localStorage.oah_volume=String(volume);if(audio.current)audio.current.volume=volume},[volume]);
   useEffect(()=>{localStorage.oah_favorites=JSON.stringify([...favorite])},[favorite]);
   useEffect(()=>{const pause=()=>{audio.current?.pause();setPlaying(false)};addEventListener('oah:pause-player',pause);return()=>removeEventListener('oah:pause-player',pause)},[]);
+  useEffect(()=>{if(autoStartKey){pendingAuto.current=true}},[autoStartKey]);
   useEffect(()=>{if(!track||!audio.current)return;const a=audio.current;a.src=track.data.audio||'';a.load();setTime(0);setDuration(Number(track.data.duration)||0);if(pendingAuto.current){pendingAuto.current=false;a.play().then(()=>setPlaying(true)).catch(()=>setPlaying(false))}else setPlaying(false)},[track?.id]);
   function toggle(){const a=audio.current;if(!a||!track)return;if(a.paused)a.play().then(()=>setPlaying(true)).catch(()=>{});else{a.pause();setPlaying(false)}}
   function go(i,auto=playing){if(!tracks.length)return;pendingAuto.current=auto;setCurrent((i+tracks.length)%tracks.length)}
@@ -1017,7 +1018,7 @@ function Player({tracks,current,setCurrent}){
     h('div',{className:'player-expanded-glow'}),
     h('div',{className:'expanded-top'},h('span',null,'NOW PLAYING'),h(IconButton,{icon:'minimize',label:'Collapse player',onClick:()=>setExpanded(false)})),
     h('img',{className:'expanded-art',src:art,alt:''}),
-    h('div',{className:'expanded-copy'},h('h2',null,track.title),h('p',null,'OneArtist Continuous Player')),
+    h('div',{className:'expanded-copy'},h('h2',null,track.title),h('p',null,track.data.releaseTitle||'OneArtist Continuous Player'),track.data.artist&&h('div',{className:'small muted'},track.data.artist)),
     progress,
     controls,
     h('div',{className:'expanded-actions'},h(IconButton,{icon:'heart',label:'Favorite',className:isFav?'active-control':'',onClick:toggleFav}),h(Button,{icon:'queue',onClick:()=>setQueueOpen(v=>!v)},'Queue'),h('div',{className:'expanded-volume'},h(Icon,{name:'volume'}),h('input',{type:'range',min:0,max:1,step:.01,value:volume,onChange:e=>setVolume(Number(e.target.value))}))),
@@ -1025,7 +1026,7 @@ function Player({tracks,current,setCurrent}){
   ):null;
   const bar=h('div',{className:'player-shell'},
     h('div',{className:'player glass-player'},
-      h('button',{className:'player-track',onClick:()=>setExpanded(true)},h('img',{src:art,alt:''}),h('div',{style:{minWidth:0}},h('div',{className:'title'},track.title),h('div',{className:'artist small muted'},'OneArtist Player'))),
+      h('button',{className:'player-track',onClick:()=>setExpanded(true)},h('img',{src:art,alt:''}),h('div',{style:{minWidth:0}},h('div',{className:'title'},track.title),h('div',{className:'artist small muted'},track.data.artist||track.data.releaseTitle||'OneArtist Player'))),
       h('div',{className:'player-center'},controls,progress),
       h('div',{className:'player-actions'},h(IconButton,{icon:'heart',label:'Favorite',className:isFav?'active-control':'',onClick:toggleFav}),h(IconButton,{icon:'queue',label:'Queue',onClick:()=>setQueueOpen(v=>!v)}),h('div',{className:'volume'},h(Icon,{name:'volume'}),h('input',{type:'range',min:0,max:1,step:.01,value:volume,onChange:e=>setVolume(Number(e.target.value))})),h(IconButton,{icon:'expand',label:'Expand player',onClick:()=>setExpanded(true)}))
     ),
@@ -1034,8 +1035,17 @@ function Player({tracks,current,setCurrent}){
   return h(React.Fragment,null,h('audio',{ref:audio,onTimeUpdate:tick,onEnded:ended,onPlay:()=>setPlaying(true),onPause:()=>setPlaying(false),preload:'metadata'}),bar,full);
 }
 const clock=s=>{if(!Number.isFinite(s))return'0:00';const m=Math.floor(s/60),x=Math.floor(s%60);return `${m}:${String(x).padStart(2,'0')}`};
+function releasePlaybackTracks(release,tracks,artistName){
+  return tracks
+    .filter(track=>track.data?.releaseId===release.id&&String(track.data?.audio||'').trim())
+    .sort((a,b)=>(Number(a.data?.trackNo)||0)-(Number(b.data?.trackNo)||0))
+    .map((track,index)=>({...track,data:{...(track.data||{}),artist:track.data?.artist||artistName||'',releaseTitle:release.title,trackNo:Number(track.data?.trackNo)||index+1}}));
+}
+function ReleaseMusicPage({releases,playRelease}){
+  return h(React.Fragment,null,h('section',{className:'public-section'},h(PageHead,{title:'Music',subtitle:'Play the attached tracks for each release.'}),h('div',{className:'release-grid'},releases.map(r=>h('article',{className:'release-card card',key:r.id},h('div',{className:'cover'},h('img',{src:r.data.cover||'/art/neon-skies.svg'})),h('div',{className:'card-copy'},h('h3',null,r.title),h('p',{className:'small muted'},r.data.description||''),h(Button,{icon:'play',variant:'primary',onClick:()=>playRelease(r)},'Play')))))))
+}
 function PublicSite({path,nav}){
-  const [data,setData]=useState(null),[video,setVideo]=useState(null),[current,setCurrent]=useState(0),[cart,setCart]=useState(()=>{try{return JSON.parse(localStorage.oah_cart||'[]')}catch{return[]}}),[cartOpen,setCartOpen]=useState(false),[mobileNav,setMobileNav]=useState(false);
+  const [data,setData]=useState(null),[video,setVideo]=useState(null),[current,setCurrent]=useState(0),[playerTracks,setPlayerTracks]=useState([]),[playRequest,setPlayRequest]=useState(0),[cart,setCart]=useState(()=>{try{return JSON.parse(localStorage.oah_cart||'[]')}catch{return[]}}),[cartOpen,setCartOpen]=useState(false),[mobileNav,setMobileNav]=useState(false);
   const [toast,show]=useToast();
   useEffect(()=>{api('public/bootstrap').then(setData).catch(e=>show(e.message,true))},[]);
   useEffect(()=>{api('analytics',{method:'POST',body:JSON.stringify({event:'site_view',objectType:'page',objectId:location.pathname})}).catch(()=>{})},[path]);
@@ -1055,15 +1065,22 @@ function PublicSite({path,nav}){
   const links=[['/music','Music'],['/videos','Videos'],['/tour','Tour'],['/shop','Shop'],['/account','My Account'],...pages.map(p=>['/page/'+p.slug,p.title])];
   function addCart(p,variant=null){const key=p.id+'::'+(variant?.id||'base'),price=variant&&variant.price!==''?Math.max(0,Number(variant.price)||0):Math.max(0,Number(p.data.price)||0),variantLabel=variant?(variant.name||[variant.size,variant.color].filter(Boolean).join(' / ')):'';setCart(c=>{const found=c.find(x=>x.key===key);return found?c.map(x=>x.key===key?{...x,qty:Math.min(20,x.qty+1)}:x):[...c,{key,id:p.id,variantId:variant?.id||'',variantLabel,title:p.title,price,qty:1,image:p.data.image||''}]});show('Added to cart.')}
   function openVideo(v){setVideo(v);api('analytics',{method:'POST',body:JSON.stringify({event:'video_view',objectType:'video',objectId:v.id})}).catch(()=>{})}
-  function playTrackByRelease(rel){const i=tracks.findIndex(t=>t.data.releaseId===rel.id);if(i>=0)setCurrent(i);else show('No preview track has been added to this release yet.',true)}
+  function playRelease(rel){
+    const playlist=releasePlaybackTracks(rel,tracks,artist.name||site.title||'Artist');
+    if(!playlist.length){show('No playable tracks available for this release.',true);return}
+    setPlayerTracks(playlist);
+    setCurrent(0);
+    setPlayRequest(request=>request+1);
+  }
+  function playTrackByRelease(rel){playRelease(rel)}
   const brand=site.logoUrl?h('img',{src:site.logoUrl,alt:artist.name||site.title||'Artist',className:'public-artist-logo'}):h('span',{className:'public-artist-brand'},site.title||artist.name||'Artist');
   return h('div',{className:'public '+theme},
     previewTheme&&h('div',{className:'theme-preview-banner'},h(Icon,{name:'eye'}),` Previewing ${previewTheme==='os'?'Artist OS':previewTheme==='neon'?'Neon Editorial':'Midnight Cinema'} — activation is controlled from OneArtist Hub Admin.`),
     h('header',{className:'public-nav'},h('a',{href:'/',className:'public-brand-link',onClick:e=>{e.preventDefault();go('/')}},brand),h('nav',{className:'public-links'},links.map(([to,label])=>h('a',{key:to,href:to,onClick:e=>{e.preventDefault();go(to)}},label))),h(IconButton,{icon:mobileNav?'close':'menu',label:'Toggle navigation',className:'mobile-public-menu',onClick:()=>setMobileNav(v=>!v)})),
     mobileNav&&h('nav',{className:'mobile-public-panel'},links.map(([to,label])=>h('a',{key:to,href:to,onClick:e=>{e.preventDefault();go(to)}},label))),
-    custom?h(CustomPage,{page:custom}):route==='/music'?h(MusicPage,{releases:allReleases,tracks,setCurrent}):route==='/videos'?h(VideosPage,{videos:allVideos,openVideo}):route==='/tour'?h(TourPage,{tours:allTours}):route==='/shop'?h(ShopPage,{products:allProducts,addCart}):h(HomePage,{theme,site,artist,releases:homeReleases,videos:homeVideos,tours:homeTours,products:homeProducts,openVideo,addCart,playTrackByRelease}),
+    custom?h(CustomPage,{page:custom}):route==='/music'?h(ReleaseMusicPage,{releases:allReleases,playRelease}):route==='/videos'?h(VideosPage,{videos:allVideos,openVideo}):route==='/tour'?h(TourPage,{tours:allTours}):route==='/shop'?h(ShopPage,{products:allProducts,addCart}):h(HomePage,{theme,site,artist,releases:homeReleases,videos:homeVideos,tours:homeTours,products:homeProducts,openVideo,addCart,playTrackByRelease}),
     h('button',{className:'cart-fab',onClick:()=>setCartOpen(true),'aria-label':'Open cart'},h(Icon,{name:'cart'}),cart.reduce((n,x)=>n+x.qty,0)>0&&h('span',{className:'cart-count'},cart.reduce((n,x)=>n+x.qty,0))),
-    tracks.length>0&&h(Player,{tracks,current,setCurrent}),video&&h(VideoModal,{video,onClose:()=>setVideo(null)}),cartOpen&&h(CartModal,{cart,setCart,onClose:()=>setCartOpen(false),show}),h(Toast,{toast})
+    playerTracks.length>0&&h(Player,{tracks:playerTracks,current,setCurrent,autoStartKey:playRequest}),video&&h(VideoModal,{video,onClose:()=>setVideo(null)}),cartOpen&&h(CartModal,{cart,setCart,onClose:()=>setCartOpen(false),show}),h(Toast,{toast})
   )
 }
 
@@ -1122,7 +1139,7 @@ function VideoSection({videos,onOpen}){return h('section',{className:'public-sec
 function ProductCard({product,onAdd}){const variants=normalizeVariants(product.data.variants),[variantId,setVariantId]=useState(variants[0]?.id||''),chosen=variants.find(v=>v.id===variantId)||null,price=chosen&&chosen.price!==''?chosen.price:product.data.price,stock=chosen?chosen.inventory:product.data.inventory,soldOut=product.data.kind==='physical'&&stock!==''&&stock!=null&&Number(stock)<=0;return h('article',{className:'product-card card'},h('div',{className:'cover'},h('img',{src:product.data.image||'/art/hoodie.svg',alt:product.title})),h('div',{className:'card-copy stack'},h('div',{className:'row between'},h('h3',null,product.title),h('strong',null,fmtMoney(price))),product.data.description&&h('p',{className:'small muted product-description'},product.data.description),variants.length>0&&h(Field,{label:'Choose option'},h(Select,{value:variantId,onChange:e=>setVariantId(e.target.value)},variants.map(v=>h('option',{key:v.id,value:v.id,disabled:v.inventory!==''&&Number(v.inventory)<=0},`${v.name||[v.size,v.color].filter(Boolean).join(' / ')||'Option'}${v.inventory!==''?` — ${Number(v.inventory)>0?`${v.inventory} left`:'Sold out'}`:''}`)))),h(Button,{variant:'primary',icon:'cart',disabled:soldOut||variants.length>0&&!chosen,onClick:()=>onAdd(product,chosen)},soldOut?'Sold Out':'Add to Cart')))}
 function ProductSection({products,onAdd}){return h('section',{className:'public-section'},h('div',{className:'section-title'},h('h2',null,'Merch & Downloads'),h('span',{className:'muted'},'Official store')),products.length?h('div',{className:'product-grid'},products.map(p=>h(ProductCard,{key:p.id,product:p,onAdd}))):h('div',{className:'empty'},'No products yet.'))}
 function TourSection({tours}){return h('section',{className:'public-section'},h('div',{className:'section-title'},h('h2',null,'Upcoming Tour Dates'),h('span',{className:'muted'},'See you on the road')),h('div',{className:'tour-list'},tours.length?tours.map(t=>h('div',{className:'tour-row',key:t.id},h('strong',null,fmtDate(t.sort_date)),h('div',null,h('strong',null,t.title),h('div',{className:'small muted'},t.data.venue||'')),t.data.ticketUrl&&h('a',{className:'btn',href:t.data.ticketUrl,target:'_blank',rel:'noopener'},'Tickets'))):h('div',{className:'empty'},'No upcoming shows.'))) }
-function MusicPage({releases,tracks,setCurrent}){return h(React.Fragment,null,h('section',{className:'public-section'},h(PageHead,{title:'Music',subtitle:'Stream previews and explore the latest releases.'}),h('div',{className:'release-grid'},releases.map(r=>h('article',{className:'release-card card',key:r.id},h('div',{className:'cover'},h('img',{src:r.data.cover||'/art/neon-skies.svg'})),h('div',{className:'card-copy'},h('h3',null,r.title),h('p',{className:'small muted'},r.data.description||''),h(Button,{icon:'play',variant:'primary',onClick:()=>{const i=tracks.findIndex(t=>t.data.releaseId===r.id);if(i>=0)setCurrent(i)}},'Play')))))))}
+function LegacyMusicPage({releases,tracks,setCurrent}){return h(React.Fragment,null,h('section',{className:'public-section'},h(PageHead,{title:'Music',subtitle:'Stream previews and explore the latest releases.'}),h('div',{className:'release-grid'},releases.map(r=>h('article',{className:'release-card card',key:r.id},h('div',{className:'cover'},h('img',{src:r.data.cover||'/art/neon-skies.svg'})),h('div',{className:'card-copy'},h('h3',null,r.title),h('p',{className:'small muted'},r.data.description||''),h(Button,{icon:'play',variant:'primary',onClick:()=>{const i=tracks.findIndex(t=>t.data.releaseId===r.id);if(i>=0)setCurrent(i)}},'Play')))))))}
 function VideosPage({videos,openVideo}){return h('section',{className:'public-section'},h(PageHead,{title:'Videos',subtitle:'Official YouTube videos open in a responsive modal.'}),h(VideoSection,{videos,onOpen:openVideo}))}
 function TourPage({tours}){return h('section',{className:'public-section'},h(PageHead,{title:'Tour',subtitle:'Upcoming live dates.'}),h(TourSection,{tours}))}
 function ShopPage({products,addCart}){return h('section',{className:'public-section'},h(PageHead,{title:'Shop',subtitle:'Music downloads and official merchandise.'}),h(ProductSection,{products,onAdd:addCart}))}
