@@ -12,6 +12,7 @@ async function paypalAccess(env){
 function installationRoutes(env){try{const routes=JSON.parse(String(env.CONNECT_INSTALLATION_ROUTES||'{}'));return routes&&typeof routes==='object'?routes:{}}catch{return {}}}
 function bearer(req){const value=req.headers.get('authorization')||'';return value.startsWith('Bearer ')?value.slice(7):''}
 function authorized(req,env){const token=bearer(req);if(!token)return false;if(env.CONNECT_SHARED_SECRET&&token===env.CONNECT_SHARED_SECRET)return true;return Object.values(installationRoutes(env)).some(route=>route&&route.token===token)}
+function installationAuthorized(req,env){const token=bearer(req);if(!token)return false;try{const tokens=JSON.parse(String(env.CONNECT_INSTALLATION_TOKENS||'[]'));if(Array.isArray(tokens)&&tokens.includes(token))return true}catch{}return Object.values(installationRoutes(env)).some(route=>route&&route.token===token)}
 function authorizedForMerchant(req,env,merchantId){if(env.CONNECT_SHARED_SECRET&&bearer(req)===env.CONNECT_SHARED_SECRET)return true;const route=installationRoutes(env)[clean(merchantId,64)];return !!route?.token&&bearer(req)===String(route.token)}
 async function pendingTrackingProof(token,trackingId){const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(token),{name:'HMAC',hash:'SHA-256'},false,['sign']);const signature=await crypto.subtle.sign('HMAC',key,new TextEncoder().encode(trackingId));return `${trackingId}.${base64url(String.fromCharCode(...new Uint8Array(signature)))}`}
 async function verifyPendingTracking(token,pending){const value=String(pending||''),separator=value.lastIndexOf('.');if(separator<1)return '';const trackingId=value.slice(0,separator),expected=await pendingTrackingProof(token,trackingId);return expected===value?trackingId:''}
@@ -50,9 +51,8 @@ export default {async fetch(req,env){
     const url=new URL(req.url);
     if(url.pathname==='/health')return json({ok:true,service:'OneArtist Connect',paypalEnvironment:env.PAYPAL_ENV==='live'?'live':'sandbox'});
     if(req.method==='POST'&&url.pathname==='/paypal/webhook')return receiveWebhook(req,env);
-    if(!authorized(req,env))return json({ok:false,error:'Unauthorized'},401);
-    if(req.method==='GET'&&url.pathname==='/config'){const pp=await paypalAccess(env);return json({ok:true,clientId:clean(env.PAYPAL_PARTNER_CLIENT_ID,255),environment:env.PAYPAL_ENV==='live'?'live':'sandbox',webhookConfigured:!!(env.PAYPAL_WEBHOOK_ID_LIVE||env.PAYPAL_WEBHOOK_ID_SANDBOX||env.PAYPAL_WEBHOOK_ID),authenticated:!!pp.token});}
     if(req.method==='POST'&&url.pathname==='/onboard/start'){
+      if(!installationAuthorized(req,env))return json({ok:false,error:'Unauthorized installation.'},401);
       const b=await req.json(),trackingId=clean(b.trackingId,120),returnUrl=clean(b.returnUrl,1000);
       if(!trackingId||!/^https:\/\//i.test(returnUrl))return json({ok:false,error:'trackingId and HTTPS returnUrl are required.'},400);
       const pp=await paypalAccess(env);
@@ -63,6 +63,7 @@ export default {async fetch(req,env){
       return json({ok:true,actionUrl,self,trackingId:await pendingTrackingProof(bearer(req),trackingId)},201);
     }
     if(req.method==='POST'&&url.pathname==='/onboard/status'){
+      if(!installationAuthorized(req,env))return json({ok:false,error:'Unauthorized installation.'},401);
       const b=await req.json(),merchantId=clean(b.merchantId,40),trackingId=clean(b.trackingId,120);
       if(!merchantId||!trackingId||!env.PAYPAL_PARTNER_ID)return json({ok:false,error:'merchantId, trackingId and PAYPAL_PARTNER_ID are required.'},400);
       const pendingTracking=await verifyPendingTracking(bearer(req),trackingId);if(!pendingTracking)return json({ok:false,error:'Unauthorized or invalid pending onboarding.'},403);
@@ -70,6 +71,8 @@ export default {async fetch(req,env){
       if(!pp.ok)return json({ok:false,error:clean(pp.data.message||'Unable to verify merchant onboarding.',500)},pp.status);
       const j=pp.data;if(j.tracking_id!==pendingTracking)return json({ok:false,error:'PayPal merchant does not belong to this pending onboarding.'},403);return json({ok:true,merchantId:j.merchant_id||merchantId,trackingId:j.tracking_id,paymentsReceivable:!!j.payments_receivable,primaryEmailConfirmed:!!j.primary_email_confirmed,products:j.products||[],oauthIntegrations:j.oauth_integrations||[]});
     }
+    if(!authorized(req,env))return json({ok:false,error:'Unauthorized'},401);
+    if(req.method==='GET'&&url.pathname==='/config'){const pp=await paypalAccess(env);return json({ok:true,clientId:clean(env.PAYPAL_PARTNER_CLIENT_ID,255),environment:env.PAYPAL_ENV==='live'?'live':'sandbox',webhookConfigured:!!(env.PAYPAL_WEBHOOK_ID_LIVE||env.PAYPAL_WEBHOOK_ID_SANDBOX||env.PAYPAL_WEBHOOK_ID),authenticated:!!pp.token});}
     if(req.method==='POST'&&url.pathname==='/paypal/create-order'){
       const b=await req.json(),merchantId=clean(b.merchantId,40),payload=b.payload||{};
       if(!merchantId||!payload?.purchase_units?.length)return json({ok:false,error:'merchantId and a valid order payload are required.'},400);

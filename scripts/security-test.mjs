@@ -19,6 +19,7 @@ const checks=[
   ['album ZIP policy is bounded',/ZIP_LIMITS/.test(ingest)&&/Nested ZIP archives/.test(ingest)],
   ['content URL policy rejects dangerous schemes',/safeUrl/.test(api)&&/sanitizeContentData/.test(api)],
   ['PayPal webhook values are reconciled',/x-oneartist-connect-token/.test(api)&&/Verified PayPal capture did not match/.test(api)&&/Verified PayPal refund did not match/.test(api)&&/verifyWebhook/.test(connectWorker)&&/authorizedForMerchant/.test(connectWorker)&&/status:verified\?200:\(response\.ok\?401:response\.status\)/.test(connectWorker)],
+  ['PayPal onboarding starts with a private installation token',/installationAuthorized/.test(connectWorker)&&/CONNECT_INSTALLATION_TOKENS/.test(connectWorker)&&/pendingTrackingProof/.test(connectWorker)&&/verifyPendingTracking/.test(connectWorker)&&/j\.tracking_id!==pendingTracking/.test(connectWorker)&&!/installationAuthorized\([^)]*CONNECT_SHARED_SECRET/.test(connectWorker)],
   ['PayPal onboarding is bound to the pending installation flow',/pendingTrackingProof/.test(connectWorker)&&/verifyPendingTracking/.test(connectWorker)&&/j\.tracking_id!==pendingTracking/.test(connectWorker)&&/trackingId:state\.trackingId,merchantId/.test(api)],
   ['self-host migration execution is implemented',/async exec\(sql\)/.test(mysql)&&!/async exec\(\)\{return \{count:0/.test(mysql)],
   ['self-host responses include security headers',/x-content-type-options/.test(selfHost)&&/strict-transport-security/.test(selfHost)],

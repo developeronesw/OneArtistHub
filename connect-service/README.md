@@ -12,6 +12,7 @@ Deploy `paypal-worker.js` as a central Cloudflare Worker owned by Developer One.
 - `PAYPAL_WEBHOOK_ID_SANDBOX` — sandbox webhook ID
 - `PAYPAL_WEBHOOK_ID_LIVE` — live webhook ID
 - `CONNECT_SHARED_SECRET` — secret used by OneArtist installations to authenticate to this Worker
+- `CONNECT_INSTALLATION_TOKENS` — JSON array of private first-time installation tokens, used only for onboarding before a PayPal merchant ID exists
 - `CONNECT_INSTALLATION_ROUTES` — private JSON mapping merchant IDs to `{ "url": "https://artist.example", "token": "site-token" }`
 
 ## Artist installation secrets
@@ -21,7 +22,7 @@ Each OneArtist installation gets:
 - `ONEARTIST_CONNECT_URL`
 - `ONEARTIST_CONNECT_TOKEN`
 
-The shared secret remains available for administrative API calls. Webhook forwarding uses the per-installation route token, allowing separate routing for each artist site without a new database.
+The shared secret remains available for administrative API calls. New installations use `CONNECT_INSTALLATION_TOKENS` only for `/onboard/start` and `/onboard/status`; after onboarding, payment APIs and webhook forwarding use the merchant-keyed route map and per-installation token.
 
 Configure PayPal to send the production webhook to `POST https://CONNECT-WORKER/paypal/webhook`. The route map is keyed by the connected seller merchant ID returned by PayPal onboarding. Never include route tokens in logs or client responses.
 

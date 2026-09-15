@@ -111,6 +111,8 @@ On each artist installation, configure these deployment secrets:
 
 The central Worker also needs `CONNECT_INSTALLATION_ROUTES`, a private JSON mapping from each connected PayPal merchant ID to that installation's HTTPS site URL and token, for example `{ "MERCHANT_ID": { "url": "https://artist.example", "token": "site-token" } }`. Configure PayPal's webhook URL as `https://CONNECT-WORKER/paypal/webhook`; do not expose route tokens in the artist UI or logs.
 
+For first-time onboarding before a merchant ID exists, configure `CONNECT_INSTALLATION_TOKENS` as a private JSON array containing the installation token, for example `["site-token"]`. This token is accepted only by `/onboard/start` and `/onboard/status`; do not use `CONNECT_SHARED_SECRET` as the artist installation token.
+
 Do **not** enter PayPal Client Secrets into the artist installation.
 
 The central Connect Worker keeps the PayPal platform credentials and webhook ID in Cloudflare Worker secrets. It handles seller onboarding, order creation/capture, refunds, order lookup, webhook signature verification and event forwarding. PayPal's current partner flow supports personal PayPal accounts for sellers onboarded before payment when using standard PayPal Checkout; Expanded Checkout requires business accounts.
