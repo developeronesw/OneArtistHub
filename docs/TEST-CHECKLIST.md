@@ -37,15 +37,15 @@
 - [ ] Low inventory creates dashboard/email notification when enabled
 
 ## PayPal checkout / webhook
-- [ ] PayPal client secret can remain blank when saving only Webhook ID/settings
-- [ ] Webhook listener is `/api/paypal/webhook`
-- [ ] Webhook ID is saved encrypted with the PayPal integration
+- [ ] Artist can connect PayPal without entering API credentials or webhook settings
+- [ ] PayPal sends events to the central Connect Worker `/paypal/webhook` endpoint
+- [ ] Worker routes verified events to the installation's authenticated internal endpoint
 - [ ] CHECKOUT.ORDER.APPROVED test event is verified and processed
 - [ ] PAYMENT.CAPTURE.COMPLETED test event is verified and processed
 - [ ] PAYMENT.CAPTURE.DENIED / approval-reversed events update order status when applicable
 - [ ] PAYMENT.CAPTURE.REFUNDED updates refund totals once
 - [ ] Duplicate webhook delivery does not duplicate transactions/refunds
-- [ ] PayPal Webhook Health shows processed/failed status
+- [ ] PayPal Payment Events shows processed/failed status
 
 ## Orders / invoices / fulfillment
 - [ ] Captured payment creates stable OneArtist invoice number

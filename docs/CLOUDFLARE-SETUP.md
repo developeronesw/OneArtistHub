@@ -100,21 +100,26 @@ Open the public site in another browser/private window.
 
 Refresh the Aurora dashboard after testing to see updated totals.
 
-## 9. Configure PayPal
+## 9. Configure PayPal Payments
 
-For initial testing use PayPal Sandbox credentials.
+OneArtist Hub uses the central **OneArtist Connect** Cloudflare Worker for PayPal seller onboarding and server-side payment API calls.
+
+On each artist installation, configure these deployment secrets:
+
+- `ONEARTIST_CONNECT_URL` — the deployed central Connect Worker URL.
+- `ONEARTIST_CONNECT_TOKEN` — the installation's shared bearer token.
+
+The central Worker also needs `CONNECT_INSTALLATION_ROUTES`, a private JSON mapping from each connected PayPal merchant ID to that installation's HTTPS site URL and token, for example `{ "MERCHANT_ID": { "url": "https://artist.example", "token": "site-token" } }`. Configure PayPal's webhook URL as `https://CONNECT-WORKER/paypal/webhook`; do not expose route tokens in the artist UI or logs.
+
+Do **not** enter PayPal Client Secrets into the artist installation.
+
+The central Connect Worker keeps the PayPal platform credentials and webhook ID in Cloudflare Worker secrets. It handles seller onboarding, order creation/capture, refunds, order lookup, webhook signature verification and event forwarding. PayPal's current partner flow supports personal PayPal accounts for sellers onboarded before payment when using standard PayPal Checkout; Expanded Checkout requires business accounts.
 
 In OneArtist Hub:
 
-**Settings → PayPal**
+**Settings → PayPal Payments → Connect PayPal**
 
-Enter:
-
-- Client ID
-- Client Secret
-- Environment: Sandbox
-
-The Client Secret is sent over HTTPS to the Pages Function, encrypted with `APP_ENCRYPTION_KEY`, and stored encrypted in D1. It is not returned to the browser after saving.
+The artist is redirected to PayPal, grants permission, and returns to OneArtist Hub. The installation stores only the connected seller/merchant state; platform credentials remain in the central Worker. Register the merchant-to-site mapping in the Worker's private `CONNECT_INSTALLATION_ROUTES` configuration so webhook events can be forwarded to the right site.
 
 ## 10. Configure Dropbox digital delivery
 

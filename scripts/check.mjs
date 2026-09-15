@@ -21,6 +21,7 @@ if(pkg.scripts?.build!=='vite build'){console.error('FAIL expected Vite producti
 const app=await readFile(resolve(root,'src/app.js'),'utf8');
 const css=await readFile(resolve(root,'src/styles.css'),'utf8');
 const api=await readFile(resolve(root,'functions/api/[[path]].js'),'utf8');
+const connectWorker=await readFile(resolve(root,'connect-service/paypal-worker.js'),'utf8');
 if(!/display:inline-flex;align-items:center;justify-content:center/.test(css)){console.error('FAIL centered button/icon CSS contract');fail=true}else console.log('PASS centered SVG button/icon contract');
 if(!/function Icon\(/.test(app)||!/<svg/i.test(await readFile(resolve(root,'public/art/oneartist-logo.svg'),'utf8'))){console.error('FAIL SVG icon/logo contract');fail=true}else console.log('PASS SVG icon/logo contract');
 if(!/checkout_sessions/.test(api)||!/Captured payment did not match/.test(api)){console.error('FAIL verified checkout binding');fail=true}else console.log('PASS verified checkout binding');
@@ -49,7 +50,8 @@ if(!/version:'0.4.0'/.test(api)||pkg.version!=='0.4.0'){console.error('FAIL 0.4.
 
 
 if(!/customer\/magic-link/.test(api)||!/customer\/orders/.test(api)||!/customer\/download/.test(api)||!/function CustomerAccount\(/.test(app)){console.error('FAIL passwordless customer account flow');fail=true}else console.log('PASS passwordless customer account flow');
-if(!/paypal\/webhook/.test(api)||!/verify-webhook-signature/.test(api)||!/webhook_events/.test(api)||!/PAYMENT\.CAPTURE\.PENDING/.test(api)||!/Preserve the webhook_event bytes exactly as received/.test(api)||!/PayPal Webhook Health/.test(app)){console.error('FAIL PayPal verified webhook flow');fail=true}else console.log('PASS PayPal verified webhook flow');
+if(!/paypal\/webhook\/internal/.test(api)||!/x-oneartist-connect-token/.test(api)||!/webhook_events/.test(api)||!/PAYMENT\.CAPTURE\.PENDING/.test(api)||!/paypal\/webhook/.test(connectWorker)||!/verifyWebhook/.test(connectWorker)||!/CONNECT_INSTALLATION_ROUTES/.test(connectWorker)||!/authorizedForMerchant/.test(connectWorker)||!/status:verified\?200:\(response\.ok\?401:response\.status\)/.test(connectWorker)){console.error('FAIL central PayPal webhook receiver and routed processing');fail=true}else console.log('PASS central PayPal webhook receiver and routed processing');
+if(!/pendingTrackingProof/.test(connectWorker)||!/verifyPendingTracking/.test(connectWorker)||!/j\.tracking_id!==pendingTracking/.test(connectWorker)||!/trackingId:state\.trackingId,merchantId/.test(api)){console.error('FAIL pending onboarding authorization binding');fail=true}else console.log('PASS pending onboarding authorization binding');
 if(!/order_documents/.test(api)||!/invoice_number/.test(api)||!/PAID INVOICE \/ RECEIPT/.test(app)){console.error('FAIL invoice/receipt flow');fail=true}else console.log('PASS invoice/receipt flow');
 if(!/normalizeVariants/.test(api)||!/function VariantEditor\(/.test(app)||!/selectedVariant/.test(api)){console.error('FAIL structured product variant flow');fail=true}else console.log('PASS structured product variant flow');
 if(!/admin\/customers/.test(api)||!/admin\/downloads/.test(api)||!/function Customers\(/.test(app)||!/function DownloadsAdmin\(/.test(app)){console.error('FAIL commerce admin customer/download tools');fail=true}else console.log('PASS commerce admin customer/download tools');
@@ -57,7 +59,7 @@ if(!/refundMatch/.test(api)||!/Issue Refund/.test(app)||!/refunded_amount/.test(
 if(!/Refund pending/.test(api)||!/transactionByProvider/.test(api)||!/d.pending/.test(app)){console.error('FAIL pending-refund webhook reconciliation');fail=true}else console.log('PASS pending-refund webhook reconciliation');
 if(!/MIGRATION_013/.test(api)||!/ensureUpgrade013/.test(api)){console.error('FAIL automatic 0.1.3 migration');fail=true}else console.log('PASS automatic 0.1.3 migration');
 if(!/idx_order_transactions_provider_id/.test(api)){console.error('FAIL PayPal transaction idempotency index');fail=true}else console.log('PASS PayPal transaction idempotency index');
-if(!/webhookId/.test(app)||!/admin\/paypal\/config/.test(api)){console.error('FAIL safe PayPal webhook configuration UI');fail=true}else console.log('PASS safe PayPal webhook configuration UI');
+if(!/PayPal Payments/.test(app)||!/Connect PayPal/.test(app)||!/admin\/paypal\/config/.test(api)||/clientSecret/.test(app)||/webhookId/.test(app)){console.error('FAIL artist PayPal connection UI');fail=true}else console.log('PASS artist PayPal connection UI');
 if(!/paypalCaptureOrRecover/.test(api)||!/waitForFinalizedOrder/.test(api)||!/PayPal payment is not fully captured yet/.test(api)||!/recovered:cap.recovered/.test(api)){console.error('FAIL PayPal capture race recovery');fail=true}else console.log('PASS PayPal capture race recovery');
 
 
@@ -94,12 +96,11 @@ try{for(const q of compatSamples)sqlCompat.assertMySQLCompatibleSQL(q);console.l
 try{execFileSync('bash',['-n',resolve(root,'self-host/install-ubuntu.sh')],{stdio:'pipe'});console.log('PASS Ubuntu installer shell syntax')}catch(e){console.error('FAIL Ubuntu installer shell syntax',String(e.stderr||e.message));fail=true}
 
 const sqliteAdapter=await readFile(resolve(root,'self-host/sqlite-adapter.mjs'),'utf8');
-const connectWorker=await readFile(resolve(root,'connect-service/paypal-worker.js'),'utf8');
 if(!/s3Request/.test(api)||!/admin\/storage\/s3\/test/.test(api)||!/S3-Compatible Storage/.test(app)){console.error('FAIL S3-compatible storage adapter');fail=true}else console.log('PASS S3-compatible storage adapter');
 if(!/api\.brevo\.com\/v3\/smtp\/email/.test(api)||!/value:'brevo'/.test(app)||!/SMTP_SEND/.test(api)||!/nodemailer/.test(selfHostServer)){console.error('FAIL Brevo and SMTP email adapters');fail=true}else console.log('PASS Brevo and SMTP email adapters');
 if(!/email_queue/.test(api)||!/processEmailQueue/.test(api)||!/Durable Email Queue/.test(app)||!/admin\/email\/queue\/retry/.test(api)){console.error('FAIL durable email retry queue');fail=true}else console.log('PASS durable email retry queue');
 if(!/SQLiteD1Adapter/.test(sqliteAdapter)||!/DB_DRIVER/.test(selfHostServer)||!/better-sqlite3/.test(await readFile(resolve(root,'self-host/package.json'),'utf8'))){console.error('FAIL self-host SQLite deployment profile');fail=true}else console.log('PASS self-host SQLite deployment profile');
-if(!/partner-referrals/.test(connectWorker)||!/merchant-integrations/.test(connectWorker)||!/admin\/paypal\/connect\/start/.test(api)||!/PayPal Connect — Partner Onboarding/.test(app)){console.error('FAIL PayPal Connect partner onboarding architecture');fail=true}else console.log('PASS PayPal Connect partner onboarding architecture');
+if(!/partner-referrals/.test(connectWorker)||!/merchant-integrations/.test(connectWorker)||!/paypal\/create-order/.test(connectWorker)||!/paypal\/capture/.test(connectWorker)||!/paypal\/refund/.test(connectWorker)||!/paypal\/webhook/.test(connectWorker)||!/paypal\/webhook\/verify/.test(connectWorker)||!/PayPal-Auth-Assertion/.test(connectWorker)||!/admin\/paypal\/connect\/start/.test(api)||!/PayPal Payments/.test(app)||!/merchantId/.test(connectWorker)||/async function paypalConfig/.test(api)||/paypalAccess\(cfg\)/.test(api)||/provider==='paypal'/.test(api)){console.error('FAIL PayPal Connect payment architecture');fail=true}else console.log('PASS PayPal Connect payment architecture');
 try{execFileSync('bash',['-n',resolve(root,'self-host/install-ubuntu-sqlite.sh')],{stdio:'pipe'});console.log('PASS SQLite Ubuntu installer shell syntax')}catch(e){console.error('FAIL SQLite Ubuntu installer shell syntax',String(e.stderr||e.message));fail=true}
 
 const pbkdf2Iterations=Number((api.match(/iterations:(\d+)/)||[])[1]||0);

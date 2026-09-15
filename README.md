@@ -22,14 +22,14 @@ OneArtist Hub is a responsive artist CMS, storefront, continuous music player an
 - Provider-backed media objects stored in D1/MySQL as metadata pointers, never as database blobs
 - Cloudflare R2 or Dropbox storage in the serverless profile; private local storage in the VPS profile
 - Cloudflare Email Service transactional-email adapter alongside Resend
-- PayPal credential connection test and direct-merchant Apps & Credentials workflow
+- PayPal seller onboarding through a central Cloudflare Worker
 - Self-hosted Node.js API with MySQL/MariaDB adapter, local media storage, NGINX and systemd installer
 - Browser-based first-run setup with a one-time setup key
 - Username/email/password administrator login plus secure forgot-password email recovery
 - PBKDF2-SHA256 password hashing
 - HttpOnly + Secure + SameSite administrator sessions
 - Session-bound CSRF protection for admin writes
-- AES-GCM encrypted PayPal, Dropbox and transactional-email integration credentials
+- AES-GCM encrypted integration credentials; PayPal platform secrets stay in the central Connect Worker
 - Aurora Glass Studio responsive dashboard
 - Aurora notification bell backed by D1 with sale, inventory and security events
 - Resend transactional email adapter, test-email tool and configurable sender identity
@@ -37,8 +37,8 @@ OneArtist Hub is a responsive artist CMS, storefront, continuous music player an
 - Passwordless customer My Account portal using one-time email magic links
 - Customer order history with branded printable invoices/receipts, refunds, fulfillment and tracking
 - Secure customer My Downloads with rotating 15-minute one-time links and admin entitlement resets
-- PayPal webhook signature verification with idempotent event processing, server-side capture fallback and concurrent browser/webhook race recovery
-- PayPal partial/full refunds with refund-aware revenue and customer email notification
+- Central PayPal webhook signature verification, per-artist event routing, idempotent event processing and concurrent browser/webhook race recovery
+- PayPal partial/full refunds through the central Worker with refund-aware revenue and customer email notification
 - Structured physical-product variants with size/color/SKU/price override and per-variant inventory
 - Server-verified inventory decrement and low-stock alerts after captured payment
 - Customer, download-entitlement and webhook-health administration screens
@@ -56,7 +56,7 @@ OneArtist Hub is a responsive artist CMS, storefront, continuous music player an
 - YouTube thumbnails derived from YouTube IDs
 - YouTube playback in a responsive modal
 - Custom HTML pages with server-side removal of scripts, iframes, inline event handlers and `javascript:` URLs
-- PayPal JS checkout using server-created/server-captured Orders API transactions, with D1 checkout snapshots and capture amount/currency verification
+- PayPal JS checkout using a platform client ID + connected seller merchant ID, server-created/server-captured Orders API transactions, D1 checkout snapshots and capture amount/currency verification
 - Physical-product flat shipping calculated server-side
 - D1 order history, printable customer receipts, PayPal shipping capture, and physical-fulfillment/tracking controls
 - Digital purchase entitlements
@@ -105,7 +105,7 @@ See `docs/CLOUDFLARE-SETUP.md` for the browser-only walkthrough and `docs/COMMER
 - `APP_ENCRYPTION_KEY`
 - future private API credentials
 
-PayPal, Dropbox and email-provider credentials are entered from the secure OneArtist Hub dashboard after installation and encrypted before being written to D1.
+Dropbox and email-provider credentials are entered from the secure OneArtist Hub dashboard and encrypted in D1. PayPal platform credentials remain in the central OneArtist Connect Worker.
 
 ## Demo data
 
@@ -115,7 +115,7 @@ Leave **Load demo content** checked during first setup. The installer creates de
 
 Cloudflare/D1 is the recommended serverless backend. The self-hosted profile uses the same API contract through the included MySQL/MariaDB compatibility adapter and private local-storage provider. The React UI remains independent of the selected database/storage profile, so additional adapters can be introduced without rebuilding the public themes.
 
-PayPal and Dropbox require your own provider credentials before those external flows can be end-to-end tested. The rest of the CMS can be tested using the included demo data immediately after D1 installation.
+PayPal requires the central OneArtist Connect Worker to be configured before seller payments can be end-to-end tested; artists do not enter PayPal API credentials. The rest of the CMS can be tested using the included demo data immediately after D1 installation.
 
 ## QA commands
 

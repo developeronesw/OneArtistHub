@@ -90,8 +90,9 @@
 - Added structured product variants for size/color/SKU/price override/inventory and server-verified variant checkout.
 - Added automatic inventory decrement and low-stock notifications after verified captures.
 - Added Customers and Digital Downloads admin screens, entitlement reset controls and webhook health visibility.
-- Added PayPal Webhook ID configuration without requiring the client secret to be re-entered.
+- Added central PayPal webhook configuration without requiring artist API credentials.
 - Preserved OneArtist Hub 0.1.2 glass player, content CRUD, themes, counters, security and transactional email.
+
 
 ## 0.1.2 — Glass Player, Identity & Notifications
 

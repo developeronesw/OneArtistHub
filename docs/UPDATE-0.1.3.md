@@ -15,11 +15,13 @@ Do not recreate D1 and do not rerun the installer.
 
 ## After deployment
 
-Open **Settings → PayPal** and add the PayPal **Webhook ID**. The Client Secret field can be left blank when keeping the existing encrypted secret.
+Open **Settings → PayPal Payments** and connect the artist's PayPal account. Do not enter PayPal API credentials or webhook settings on the artist site.
 
 Webhook listener:
 
-`https://YOUR-DOMAIN/api/paypal/webhook`
+`https://CONNECT-WORKER/paypal/webhook`
+
+The Connect Worker verifies each event and forwards it to the installation's authenticated internal processor.
 
 Subscribe to:
 
@@ -30,4 +32,4 @@ Subscribe to:
 - `PAYMENT.CAPTURE.REFUNDED`
 - `CHECKOUT.PAYMENT-APPROVAL.REVERSED`
 
-Then verify the **PayPal Webhook Health** panel begins showing processed events after sandbox/live test transactions.
+Then verify the **PayPal Payment Events** panel begins showing processed events after sandbox/live test transactions.

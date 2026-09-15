@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 
 const api=await readFile(new URL('../functions/api/[[path]].js',import.meta.url),'utf8');
+const connectWorker=await readFile(new URL('../connect-service/paypal-worker.js',import.meta.url),'utf8');
 const ingest=await readFile(new URL('../src/media-ingest.js',import.meta.url),'utf8');
 const selfHost=await readFile(new URL('../self-host/server.mjs',import.meta.url),'utf8');
 const mysql=await readFile(new URL('../self-host/mysql-adapter.mjs',import.meta.url),'utf8');
@@ -17,7 +18,8 @@ const checks=[
   ['uploads have bounded streaming, signature validation, and preflight limits',/readLimitedBody/.test(api)&&/mediaBytesMatch/.test(api)&&/declaredLength/.test(api)],
   ['album ZIP policy is bounded',/ZIP_LIMITS/.test(ingest)&&/Nested ZIP archives/.test(ingest)],
   ['content URL policy rejects dangerous schemes',/safeUrl/.test(api)&&/sanitizeContentData/.test(api)],
-  ['PayPal webhook values are reconciled',/paypal_verification_failure/.test(api)&&/Verified PayPal capture did not match/.test(api)&&/Verified PayPal refund did not match/.test(api)],
+  ['PayPal webhook values are reconciled',/x-oneartist-connect-token/.test(api)&&/Verified PayPal capture did not match/.test(api)&&/Verified PayPal refund did not match/.test(api)&&/verifyWebhook/.test(connectWorker)&&/authorizedForMerchant/.test(connectWorker)&&/status:verified\?200:\(response\.ok\?401:response\.status\)/.test(connectWorker)],
+  ['PayPal onboarding is bound to the pending installation flow',/pendingTrackingProof/.test(connectWorker)&&/verifyPendingTracking/.test(connectWorker)&&/j\.tracking_id!==pendingTracking/.test(connectWorker)&&/trackingId:state\.trackingId,merchantId/.test(api)],
   ['self-host migration execution is implemented',/async exec\(sql\)/.test(mysql)&&!/async exec\(\)\{return \{count:0/.test(mysql)],
   ['self-host responses include security headers',/x-content-type-options/.test(selfHost)&&/strict-transport-security/.test(selfHost)],
   ['Pages headers preserve provider compatibility and frame policy',/paypal\.com/.test(headers)&&/youtube-nocookie\.com/.test(headers)&&/frame-ancestors 'self'/.test(headers)&&/Strict-Transport-Security/.test(headers)]
