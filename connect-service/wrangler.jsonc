@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "oneartisthub-connect",
+  "main": "paypal-worker.js",
+  "compatibility_date": "2026-09-17",
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "connect.oneartisthub.site",
+      "custom_domain": true
+    }
+  ]
+}

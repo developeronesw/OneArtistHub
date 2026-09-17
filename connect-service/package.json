@@ -1,0 +1,14 @@
+{
+  "name": "oneartisthub-connect",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "validate": "wrangler deploy --dry-run",
+    "test": "node --test test/paypal-worker.test.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "4.133.0"
+  }
+}
