@@ -4,6 +4,12 @@
   "main": "paypal-worker.js",
   "compatibility_date": "2026-09-17",
   "workers_dev": false,
+  "kv_namespaces": [
+    {
+      "binding": "CONNECT_INSTALLATIONS",
+      "id": "3a775fdfa9f646d4a4a0da9d1727286c"
+    }
+  ],
   "routes": [
     {
       "pattern": "connect.oneartisthub.site",

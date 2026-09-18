@@ -117,6 +117,12 @@ Cloudflare/D1 is the recommended serverless backend. The self-hosted profile use
 
 PayPal requires the central OneArtist Connect Worker to be configured before seller payments can be end-to-end tested; artists do not enter PayPal API credentials. The rest of the CMS can be tested using the included demo data immediately after D1 installation.
 
+### Automatic OneArtist Connect registration
+
+Managed HTTPS installations register with the central Connect Worker automatically during first-run setup. The managed server-side control plane generates an installation ID and one-time bootstrap credential in memory, activates its hash, and exchanges it immediately for a Worker-generated `OAH_INST_<64 lowercase hexadecimal characters>` credential encrypted in the server-side integrations store. Neither credential is sent to the browser or added to Vite variables. Standalone self-hosted installations remain unprovisioned unless explicitly enrolled.
+
+The Connect Worker needs a `CONNECT_INSTALLATIONS` KV binding. The managed control-plane runtime is configured with `ONEARTIST_CONNECT_PROVISIONING_SECRET`; it is never configured for self-hosted customer servers or client code and authenticates activation to the Worker’s `CONNECT_SHARED_SECRET`. Successful registration consumes the one-time KV activation. Existing `ONEARTIST_CONNECT_TOKEN` deployments remain supported as a legacy/manual migration path. See [connect-service/README.md](connect-service/README.md) for local-test instructions.
+
 ## QA commands
 
 For local development/QA, install the declared React/Vite dependencies first:

@@ -1,6 +1,6 @@
 function json(data,status=200){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store'}})}
 const clean=(v,n=500)=>String(v??'').replace(/\0/g,'').slice(0,n)
-const JSON_POST_ROUTES=new Set(['/onboard/start','/onboard/status','/paypal/create-order','/paypal/order','/paypal/capture','/paypal/refund','/paypal/webhook/verify'])
+const JSON_POST_ROUTES=new Set(['/installations/activate','/installations/register','/installations/revoke','/onboard/start','/onboard/status','/paypal/create-order','/paypal/order','/paypal/capture','/paypal/refund','/paypal/webhook/verify'])
 function base64url(value){return btoa(typeof value==='string'?value:JSON.stringify(value)).replace(/=+$/,'').replace(/\+/g,'-').replace(/\//g,'_')}
 function authAssertion(clientId,merchantId){return `${base64url({alg:'none'})}.${base64url({iss:clientId,payer_id:merchantId})}.`}
 function configurationError(message){const error=new Error(message);error.status=503;return error}
@@ -14,13 +14,39 @@ async function paypalAccess(env){
 }
 function installationRoutes(env){try{const routes=JSON.parse(String(env.CONNECT_INSTALLATION_ROUTES||'{}'));return routes&&typeof routes==='object'?routes:{}}catch{return {}}}
 function bearer(req){const value=req.headers.get('authorization')||'';return value.startsWith('Bearer ')?value.slice(7):''}
-function authorized(req,env){const token=bearer(req);if(!token)return false;if(env.CONNECT_SHARED_SECRET&&token===env.CONNECT_SHARED_SECRET)return true;return Object.values(installationRoutes(env)).some(route=>route&&route.token===token)}
-function installationAuthorized(req,env){const token=bearer(req);if(!token)return false;try{const tokens=JSON.parse(String(env.CONNECT_INSTALLATION_TOKENS||'[]'));if(Array.isArray(tokens)&&tokens.includes(token))return true}catch{}return Object.values(installationRoutes(env)).some(route=>route&&route.token===token)}
-function authorizedForMerchant(req,env,merchantId){if(env.CONNECT_SHARED_SECRET&&bearer(req)===env.CONNECT_SHARED_SECRET)return true;const route=installationRoutes(env)[clean(merchantId,64)];return !!route?.token&&bearer(req)===String(route.token)}
+function bytesToB64url(bytes){let value='';for(const byte of bytes)value+=String.fromCharCode(byte);return btoa(value).replace(/=+$/,'').replace(/\+/g,'-').replace(/\//g,'_')}
+function b64urlToBytes(value){const normalized=String(value).replace(/-/g,'+').replace(/_/g,'/'),padded=normalized+'='.repeat((4-normalized.length%4)%4);const raw=atob(padded),out=new Uint8Array(raw.length);for(let i=0;i<raw.length;i++)out[i]=raw.charCodeAt(i);return out}
+function installationToken(){const bytes=crypto.getRandomValues(new Uint8Array(32));return `OAH_INST_${Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('')}`}
+function installationId(){const bytes=crypto.getRandomValues(new Uint8Array(16));return `OAH_SITE_${Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('')}`}
+function validInstallationId(value){return /^OAH_SITE_[a-f0-9]{32}$/.test(String(value||''))}
+function validRoute(value){try{const url=new URL(String(value));return url.protocol==='https:'&&!url.username&&!url.password&&!url.search&&!url.hash?url.toString().replace(/\/+$/,''):''}catch{return ''}}
+async function tokenHash(token){return bytesToB64url(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(String(token)))))}
+async function registryCryptoKey(env){if(!env.CONNECT_SHARED_SECRET)throw configurationError('CONNECT_SHARED_SECRET is not configured.');const raw=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(String(env.CONNECT_SHARED_SECRET)));return crypto.subtle.importKey('raw',raw,{name:'AES-GCM'},false,['encrypt','decrypt'])}
+async function encryptRegistryToken(env,token){const iv=crypto.getRandomValues(new Uint8Array(12)),key=await registryCryptoKey(env),data=await crypto.subtle.encrypt({name:'AES-GCM',iv},key,new TextEncoder().encode(token));return `${bytesToB64url(iv)}.${bytesToB64url(new Uint8Array(data))}`}
+async function decryptRegistryToken(env,value){const [iv,data]=String(value||'').split('.');if(!iv||!data)return '';try{const out=await crypto.subtle.decrypt({name:'AES-GCM',iv:b64urlToBytes(iv)},await registryCryptoKey(env),b64urlToBytes(data));return new TextDecoder().decode(out)}catch{return ''}}
+function registry(env){return env.CONNECT_INSTALLATIONS&&typeof env.CONNECT_INSTALLATIONS.get==='function'?env.CONNECT_INSTALLATIONS:null}
+const installationKey=id=>`installation:${id}`
+const activationKey=id=>`activation:${id}`
+const tokenKey=hash=>`token:${hash}`
+const merchantKey=id=>`merchant:${id}`
+async function registryInstallation(env,id){const kv=registry(env);if(!kv||!validInstallationId(id))return null;try{const record=await kv.get(installationKey(id),'json');return record&&record.installationId===id?record:null}catch{return null}}
+async function registryByToken(env,token){const kv=registry(env);if(!kv||!token)return null;const hash=await tokenHash(token);try{const id=await kv.get(tokenKey(hash));const record=await registryInstallation(env,id);return record?.active&&record.tokenHash===hash?record:null}catch{return null}}
+async function registryMerchant(env,merchantId){const kv=registry(env),id=clean(merchantId,64);if(!kv||!id)return null;try{return registryInstallation(env,await kv.get(merchantKey(id)))}catch{return null}}
+async function putRegistryInstallation(env,record){const kv=registry(env);if(!kv)throw configurationError('CONNECT_INSTALLATIONS KV binding is not configured.');await kv.put(installationKey(record.installationId),JSON.stringify(record));await kv.put(tokenKey(record.tokenHash),record.installationId);if(record.merchantId)await kv.put(merchantKey(record.merchantId),record.installationId)}
+async function legacyInstallationAuthorized(env,token){try{const tokens=JSON.parse(String(env.CONNECT_INSTALLATION_TOKENS||'[]'));if(Array.isArray(tokens)&&tokens.includes(token))return true}catch{}return Object.values(installationRoutes(env)).some(route=>route&&route.token===token)}
+async function createActivation(env,{installationId,url,bootstrapHash}){const route=validRoute(url),hash=clean(bootstrapHash,128);if(!validInstallationId(installationId)||!route||!/^[A-Za-z0-9_-]{43}$/.test(hash))throw Object.assign(new Error('A valid installation ID, HTTPS callback URL and SHA-256 bootstrap hash are required.'),{status:400});const kv=registry(env);if(!kv)throw configurationError('CONNECT_INSTALLATIONS KV binding is not configured.');if(await registryInstallation(env,installationId))throw Object.assign(new Error('Installation ID is already registered.'),{status:409});const existing=await kv.get(activationKey(installationId),'json');if(existing){if(existing.installationId===installationId&&existing.url===route&&existing.bootstrapHash===hash)return {reused:true};throw Object.assign(new Error('Installation ID already has a different activation.'),{status:409});}await kv.put(activationKey(installationId),JSON.stringify({installationId,url:route,bootstrapHash:hash,active:true,createdAt:new Date().toISOString()}));return {reused:false}}
+async function consumeActivation(env,installationId,route,token){const kv=registry(env);if(!kv||!token)return false;try{const activation=await kv.get(activationKey(installationId),'json');return !!activation&&activation.installationId===installationId&&activation.url===route&&activation.bootstrapHash===await tokenHash(token)}catch{return false}}
+async function authorized(req,env){const token=bearer(req);if(!token)return false;return !!(await registryByToken(env,token))||await legacyInstallationAuthorized(env,token)}
+async function installationAuthorized(req,env){const token=bearer(req);return !!token&&(!!(await registryByToken(env,token))||await legacyInstallationAuthorized(env,token))}
+async function authorizedForMerchant(req,env,merchantId){const token=bearer(req);const record=await registryMerchant(env,merchantId);if(record?.active)return record.tokenHash===await tokenHash(token);const route=installationRoutes(env)[clean(merchantId,64)];return !!route?.token&&token===String(route.token)}
+async function registerInstallation(env,{installationId,url}){const route=validRoute(url);if(!validInstallationId(installationId)||!route)throw Object.assign(new Error('A valid installationId and HTTPS callback URL are required.'),{status:400});if(!registry(env))throw configurationError('CONNECT_INSTALLATIONS KV binding is not configured.');const existing=await registryInstallation(env,installationId);if(existing){if(existing.url!==route)throw Object.assign(new Error('Installation ID is already bound to a different callback URL.'),{status:409});const token=await decryptRegistryToken(env,existing.tokenCipher);if(!token)throw configurationError('Installation registry credential could not be read.');if(!existing.active){existing.active=true;existing.updatedAt=new Date().toISOString();await putRegistryInstallation(env,existing)}return {installationId,token,reused:true};}const token=installationToken(),record={installationId,url:route,tokenHash:await tokenHash(token),tokenCipher:await encryptRegistryToken(env,token),active:true,merchantId:'',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};await putRegistryInstallation(env,record);return {installationId,token,reused:false}}
+async function revokeInstallation(env,installationId){const record=await registryInstallation(env,installationId);if(!record)throw Object.assign(new Error('Installation was not found.'),{status:404});record.active=false;record.updatedAt=new Date().toISOString();await putRegistryInstallation(env,record)}
+async function associateMerchant(env,token,merchantId){const record=await registryByToken(env,token);if(!record)return false;const existing=await registryMerchant(env,merchantId);if(existing&&existing.installationId!==record.installationId)return false;record.merchantId=clean(merchantId,64);record.updatedAt=new Date().toISOString();await putRegistryInstallation(env,record);return true}
+export {installationId,installationToken};
 async function pendingTrackingProof(token,trackingId){const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(token),{name:'HMAC',hash:'SHA-256'},false,['sign']);const signature=await crypto.subtle.sign('HMAC',key,new TextEncoder().encode(trackingId));return `${trackingId}.${base64url(String.fromCharCode(...new Uint8Array(signature)))}`}
 async function verifyPendingTracking(token,pending){const value=String(pending||''),separator=value.lastIndexOf('.');if(separator<1)return '';const trackingId=value.slice(0,separator),expected=await pendingTrackingProof(token,trackingId);return expected===value?trackingId:''}
 function webhookMerchantIds(event){const resource=event?.resource||{},ids=[];const add=value=>{const id=clean(value,64);if(id&&!ids.includes(id))ids.push(id)};add(resource.payee?.merchant_id);for(const unit of resource.purchase_units||[])add(unit?.payee?.merchant_id);add(resource.seller_merchant_id);add(resource.seller?.merchant_id);return ids}
-function webhookRoute(env,event){const routes=installationRoutes(env);for(const merchantId of webhookMerchantIds(event)){const route=routes[merchantId];if(!route?.url||!route?.token)continue;try{const target=new URL(String(route.url));if(target.protocol!=='https:')continue;return {merchantId,url:target.toString().replace(/\/+$/,''),token:String(route.token)}}catch{}}return null}
+async function webhookRoute(env,event){const routes=installationRoutes(env);for(const merchantId of webhookMerchantIds(event)){const registered=await registryMerchant(env,merchantId);if(registered?.active){const token=await decryptRegistryToken(env,registered.tokenCipher);if(token&&validRoute(registered.url))return {merchantId,url:validRoute(registered.url),token}}const route=routes[merchantId];if(!route?.url||!route?.token)continue;const target=validRoute(route.url);if(target)return {merchantId,url:target,token:String(route.token)}}return null}
 async function verifyWebhook(env,rawBody,headers){
   const webhookId=env.PAYPAL_ENV==='live'?(env.PAYPAL_WEBHOOK_ID_LIVE||env.PAYPAL_WEBHOOK_ID):(env.PAYPAL_WEBHOOK_ID_SANDBOX||env.PAYPAL_WEBHOOK_ID);
   if(!webhookId)return {ok:false,status:503,error:'PayPal webhook ID is not configured on the Connect worker.'};
@@ -33,7 +59,7 @@ async function verifyWebhook(env,rawBody,headers){
 async function receiveWebhook(req,env){
   const rawBody=await req.text(),headers={auth_algo:req.headers.get('paypal-auth-algo')||'',cert_url:req.headers.get('paypal-cert-url')||'',transmission_id:req.headers.get('paypal-transmission-id')||'',transmission_sig:req.headers.get('paypal-transmission-sig')||'',transmission_time:req.headers.get('paypal-transmission-time')||''};
   const verification=await verifyWebhook(env,rawBody,headers);if(!verification.ok)return json({ok:false,error:verification.error},verification.status||400);
-  const route=webhookRoute(env,verification.event);if(!route)return json({ok:false,error:'No connected OneArtist site is registered for this PayPal merchant.'},404);
+  const route=await webhookRoute(env,verification.event);if(!route)return json({ok:false,error:'No connected OneArtist site is registered for this PayPal merchant.'},404);
   const response=await fetch(`${route.url}/api/paypal/webhook/internal`,{method:'POST',headers:{'content-type':'application/json','x-oneartist-connect-token':route.token,'x-oneartist-connect-merchant':route.merchantId},body:rawBody});
   if(!response.ok)return json({ok:false,error:'Connected OneArtist site did not accept the verified event.'},502);
   return json({ok:true,forwarded:true},200);
@@ -56,8 +82,23 @@ export default {async fetch(req,env){
     if(req.method==='POST'&&url.pathname==='/paypal/webhook')return receiveWebhook(req,env);
     let requestBody={};
     if(req.method==='POST'&&JSON_POST_ROUTES.has(url.pathname)){try{requestBody=await req.json()}catch{return json({ok:false,error:'Invalid JSON request body.'},400)}}
+    if(req.method==='POST'&&url.pathname==='/installations/register'){
+      const id=clean(requestBody.installationId,64),route=validRoute(clean(requestBody.url,1000));
+      if(!validInstallationId(id)||!route)return json({ok:false,error:'A valid installationId and HTTPS callback URL are required.'},400);
+      if(!(await consumeActivation(env,id,route,bearer(req))))return json({ok:false,error:'Unauthorized registration.'},401);
+      const result=await registerInstallation(env,{installationId:id,url:route});await registry(env).delete(activationKey(id));return json({ok:true,...result},201);
+    }
+    if(req.method==='POST'&&url.pathname==='/installations/activate'){
+      if(!env.CONNECT_SHARED_SECRET||bearer(req)!==env.CONNECT_SHARED_SECRET)return json({ok:false,error:'Unauthorized activation.'},401);
+      const result=await createActivation(env,{installationId:clean(requestBody.installationId,64),url:clean(requestBody.url,1000),bootstrapHash:clean(requestBody.bootstrapHash,128)});return json({ok:true},result.reused?200:201);
+    }
+    if(req.method==='POST'&&url.pathname==='/installations/revoke'){
+      const token=bearer(req),record=await registryByToken(env,token),id=clean(requestBody.installationId,64);
+      if(!record||record.installationId!==id)return json({ok:false,error:'Unauthorized installation revocation.'},403);
+      await revokeInstallation(env,id);return json({ok:true});
+    }
     if(req.method==='POST'&&url.pathname==='/onboard/start'){
-      if(!installationAuthorized(req,env))return json({ok:false,error:'Unauthorized installation.'},401);
+      if(!(await installationAuthorized(req,env)))return json({ok:false,error:'Unauthorized installation.'},401);
       const b=requestBody,trackingId=clean(b.trackingId,120),returnUrl=clean(b.returnUrl,1000);
       if(!trackingId||!/^https:\/\//i.test(returnUrl))return json({ok:false,error:'trackingId and HTTPS returnUrl are required.'},400);
       const attribution=partnerAttribution(env),pp=await paypalAccess(env);
@@ -68,20 +109,20 @@ export default {async fetch(req,env){
       return json({ok:true,actionUrl,self,trackingId:await pendingTrackingProof(bearer(req),trackingId)},201);
     }
     if(req.method==='POST'&&url.pathname==='/onboard/status'){
-      if(!installationAuthorized(req,env))return json({ok:false,error:'Unauthorized installation.'},401);
+      if(!(await installationAuthorized(req,env)))return json({ok:false,error:'Unauthorized installation.'},401);
       const b=requestBody,merchantId=clean(b.merchantId,40),trackingId=clean(b.trackingId,120);
       if(!merchantId||!trackingId||!env.PAYPAL_PARTNER_ID)return json({ok:false,error:'merchantId, trackingId and PAYPAL_PARTNER_ID are required.'},400);
       const pendingTracking=await verifyPendingTracking(bearer(req),trackingId);if(!pendingTracking)return json({ok:false,error:'Unauthorized or invalid pending onboarding.'},403);
       const pp=await paypalJson(env,`/v1/customer/partners/${encodeURIComponent(env.PAYPAL_PARTNER_ID)}/merchant-integrations/${encodeURIComponent(merchantId)}`,{});
       if(!pp.ok)return json({ok:false,error:clean(pp.data.message||'Unable to verify merchant onboarding.',500)},pp.status);
-      const j=pp.data;if(j.tracking_id!==pendingTracking)return json({ok:false,error:'PayPal merchant does not belong to this pending onboarding.'},403);return json({ok:true,merchantId:j.merchant_id||merchantId,trackingId:j.tracking_id,paymentsReceivable:!!j.payments_receivable,primaryEmailConfirmed:!!j.primary_email_confirmed,products:j.products||[],oauthIntegrations:j.oauth_integrations||[]});
+      const j=pp.data;if(j.tracking_id!==pendingTracking)return json({ok:false,error:'PayPal merchant does not belong to this pending onboarding.'},403);const confirmedMerchant=clean(j.merchant_id||merchantId,40);if(registry(env)&&!(await associateMerchant(env,bearer(req),confirmedMerchant)))return json({ok:false,error:'PayPal merchant is already associated with another installation.'},409);return json({ok:true,merchantId:confirmedMerchant,trackingId:j.tracking_id,paymentsReceivable:!!j.payments_receivable,primaryEmailConfirmed:!!j.primary_email_confirmed,products:j.products||[],oauthIntegrations:j.oauth_integrations||[]});
     }
-    if(!authorized(req,env))return json({ok:false,error:'Unauthorized'},401);
+    if(!(await authorized(req,env)))return json({ok:false,error:'Unauthorized'},401);
     if(req.method==='GET'&&url.pathname==='/config'){partnerAttribution(env);const pp=await paypalAccess(env);return json({ok:true,clientId:clean(env.PAYPAL_PARTNER_CLIENT_ID,255),environment:env.PAYPAL_ENV==='live'?'live':'sandbox',webhookConfigured:!!(env.PAYPAL_WEBHOOK_ID_LIVE||env.PAYPAL_WEBHOOK_ID_SANDBOX||env.PAYPAL_WEBHOOK_ID),authenticated:!!pp.token});}
     if(req.method==='POST'&&url.pathname==='/paypal/create-order'){
       const b=requestBody,merchantId=clean(b.merchantId,40),payload=b.payload||{};
       if(!merchantId||!Array.isArray(payload.purchase_units)||!payload.purchase_units.length)return json({ok:false,error:'merchantId and a valid order payload are required.'},400);
-      if(!authorizedForMerchant(req,env,merchantId))return json({ok:false,error:'Unauthorized merchant.'},403);
+      if(!(await authorizedForMerchant(req,env,merchantId)))return json({ok:false,error:'Unauthorized merchant.'},403);
       if(payload.purchase_units.some(unit=>unit?.payment_instruction&&Object.prototype.hasOwnProperty.call(unit.payment_instruction,'platform_fees')))return json({ok:false,error:'Platform fees are not supported.'},400);
       payload.purchase_units=payload.purchase_units.map(u=>({...u,payee:{...(u.payee||{}),merchant_id:merchantId},payment_instruction:{...(u.payment_instruction||{}),disbursement_mode:'INSTANT'}}));
       const r=await paypalJson(env,'/v2/checkout/orders',{method:'POST',merchantId,body:payload,requestId:b.requestId});
@@ -90,17 +131,17 @@ export default {async fetch(req,env){
     }
     if(req.method==='POST'&&url.pathname==='/paypal/order'){
       const b=requestBody,merchantId=clean(b.merchantId,40),orderId=clean(b.orderId,80);if(!merchantId||!orderId)return json({ok:false,error:'merchantId and orderId are required.'},400);
-      if(!authorizedForMerchant(req,env,merchantId))return json({ok:false,error:'Unauthorized merchant.'},403);
+      if(!(await authorizedForMerchant(req,env,merchantId)))return json({ok:false,error:'Unauthorized merchant.'},403);
       const r=await paypalJson(env,`/v2/checkout/orders/${encodeURIComponent(orderId)}`,{merchantId});if(!r.ok)return json({ok:false,error:clean(r.data.message||'PayPal order lookup failed.',500)},r.status||502);return json({ok:true,order:r.data});
     }
     if(req.method==='POST'&&url.pathname==='/paypal/capture'){
       const b=requestBody,merchantId=clean(b.merchantId,40),orderId=clean(b.orderId,80);if(!merchantId||!orderId)return json({ok:false,error:'merchantId and orderId are required.'},400);
-      if(!authorizedForMerchant(req,env,merchantId))return json({ok:false,error:'Unauthorized merchant.'},403);
+      if(!(await authorizedForMerchant(req,env,merchantId)))return json({ok:false,error:'Unauthorized merchant.'},403);
       const r=await paypalJson(env,`/v2/checkout/orders/${encodeURIComponent(orderId)}/capture`,{method:'POST',merchantId,body:{},requestId:b.requestId});if(!r.ok)return json({ok:false,error:clean(r.data.message||'PayPal capture failed.',500),details:r.data.details||[]},r.status||502);return json({ok:true,order:r.data});
     }
     if(req.method==='POST'&&url.pathname==='/paypal/refund'){
       const b=requestBody,merchantId=clean(b.merchantId,40),captureId=clean(b.captureId,80);if(!merchantId||!captureId)return json({ok:false,error:'merchantId and captureId are required.'},400);
-      if(!authorizedForMerchant(req,env,merchantId))return json({ok:false,error:'Unauthorized merchant.'},403);
+      if(!(await authorizedForMerchant(req,env,merchantId)))return json({ok:false,error:'Unauthorized merchant.'},403);
       const r=await paypalJson(env,`/v2/payments/captures/${encodeURIComponent(captureId)}/refund`,{method:'POST',merchantId,body:b.payload||{},requestId:b.requestId});if(!r.ok||!['COMPLETED','PENDING'].includes(String(r.data.status||'').toUpperCase()))return json({ok:false,error:clean(r.data.message||'PayPal refund failed.',500),details:r.data.details||[]},r.status||502);return json({ok:true,refund:r.data});
     }
     if(req.method==='POST'&&url.pathname==='/paypal/webhook/verify'){
