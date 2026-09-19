@@ -1,0 +1,10 @@
+{
+  "id": "cartel",
+  "name": "Cartel Full Width",
+  "version": "1.0.0",
+  "target": "OneArtistHub 0.4.x",
+  "description": "Edge-to-edge street-luxury artist theme based on the supplied T. Cartel mockup.",
+  "entry": "src/app.js",
+  "styles": "src/styles.css",
+  "activation": "Admin > Themes > Cartel Full Width"
+}

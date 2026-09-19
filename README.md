@@ -155,3 +155,8 @@ Release QA notes: `docs/RELEASE-QA-0.2.2.md`.
 ## 0.3.0 mockup-locked public themes
 
 The three public themes are intentionally separate visual systems, not recolors of one shared template. Midnight Cinema, Artist OS, and Neon Editorial reproduce the approved concept-board geometry and visual hierarchy while binding to the same live OneArtist content, commerce, analytics, media and continuous-player data. Theme switching remains immediate through `site.publicTheme`.
+
+
+## Simple Theme Builder
+
+OneArtistHub includes a lightweight visual homepage builder under **Admin → Theme Builder**. Artists can reorder sections with drag-and-drop, add multiple hero sections, create two-column layouts, move components between columns, configure section content, and activate the responsive result without editing code. See `docs/THEME-BUILDER.md`.
