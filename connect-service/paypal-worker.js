@@ -1,6 +1,6 @@
 function json(data,status=200){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store'}})}
 const clean=(v,n=500)=>String(v??'').replace(/\0/g,'').slice(0,n)
-const JSON_POST_ROUTES=new Set(['/installations/activate','/installations/register','/installations/revoke','/onboard/start','/onboard/status','/paypal/create-order','/paypal/order','/paypal/capture','/paypal/refund','/paypal/webhook/verify'])
+const JSON_POST_ROUTES=new Set(['/installations/activate','/installations/register','/installations/revoke','/onboard/start','/onboard/status','/paypal/create-order','/paypal/order','/paypal/capture','/paypal/refund','/paypal/webhook/verify','/square/connect/start','/square/disconnect','/square/checkout','/square/order'])
 function base64url(value){return btoa(typeof value==='string'?value:JSON.stringify(value)).replace(/=+$/,'').replace(/\+/g,'-').replace(/\//g,'_')}
 function authAssertion(clientId,merchantId){return `${base64url({alg:'none'})}.${base64url({iss:clientId,payer_id:merchantId})}.`}
 function configurationError(message){const error=new Error(message);error.status=503;return error}
@@ -29,6 +29,8 @@ const installationKey=id=>`installation:${id}`
 const activationKey=id=>`activation:${id}`
 const tokenKey=hash=>`token:${hash}`
 const merchantKey=id=>`merchant:${id}`
+const squareKey=id=>`square:${id}`
+const squareOAuthKey=state=>`square-oauth:${state}`
 async function registryInstallation(env,id){const kv=registry(env);if(!kv||!validInstallationId(id))return null;try{const record=await kv.get(installationKey(id),'json');return record&&record.installationId===id?record:null}catch{return null}}
 async function registryByToken(env,token){const kv=registry(env);if(!kv||!token)return null;const hash=await tokenHash(token);try{const id=await kv.get(tokenKey(hash));const record=await registryInstallation(env,id);return record?.active&&record.tokenHash===hash?record:null}catch{return null}}
 async function registryMerchant(env,merchantId){const kv=registry(env),id=clean(merchantId,64);if(!kv||!id)return null;try{return registryInstallation(env,await kv.get(merchantKey(id)))}catch{return null}}
@@ -42,6 +44,64 @@ async function authorizedForMerchant(req,env,merchantId){const token=bearer(req)
 async function registerInstallation(env,{installationId,url}){const route=validRoute(url);if(!validInstallationId(installationId)||!route)throw Object.assign(new Error('A valid installationId and HTTPS callback URL are required.'),{status:400});if(!registry(env))throw configurationError('CONNECT_INSTALLATIONS KV binding is not configured.');const existing=await registryInstallation(env,installationId);if(existing){if(existing.url!==route)throw Object.assign(new Error('Installation ID is already bound to a different callback URL.'),{status:409});const token=await decryptRegistryToken(env,existing.tokenCipher);if(!token)throw configurationError('Installation registry credential could not be read.');if(!existing.active){existing.active=true;existing.updatedAt=new Date().toISOString();await putRegistryInstallation(env,existing)}return {installationId,token,reused:true};}const token=installationToken(),record={installationId,url:route,tokenHash:await tokenHash(token),tokenCipher:await encryptRegistryToken(env,token),active:true,merchantId:'',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};await putRegistryInstallation(env,record);return {installationId,token,reused:false}}
 async function revokeInstallation(env,installationId){const record=await registryInstallation(env,installationId);if(!record)throw Object.assign(new Error('Installation was not found.'),{status:404});record.active=false;record.updatedAt=new Date().toISOString();await putRegistryInstallation(env,record)}
 async function associateMerchant(env,token,merchantId){const record=await registryByToken(env,token);if(!record)return false;const existing=await registryMerchant(env,merchantId);if(existing&&existing.installationId!==record.installationId)return false;record.merchantId=clean(merchantId,64);record.updatedAt=new Date().toISOString();await putRegistryInstallation(env,record);return true}
+async function squareConfig(env){
+  const environment=env.SQUARE_ENV==='sandbox'?'sandbox':'production';
+  const clientId=clean(env.SQUARE_CLIENT_ID,191).trim();
+  const clientSecret=String(env.SQUARE_CLIENT_SECRET||'');
+  if(!clientId||!clientSecret)throw configurationError('Square OAuth is not configured.');
+  const base=environment==='sandbox'?'https://connect.squareupsandbox.com':'https://connect.squareup.com';
+  const redirect=String(env.SQUARE_REDIRECT_URI||'https://connect.oneartisthub.site/square/oauth/callback');
+  if(!/^https:\/\//i.test(redirect))throw configurationError('Square OAuth redirect URI must use HTTPS.');
+  return {environment,clientId,clientSecret,base,redirect};
+}
+async function squareConnection(env,installationId){
+  const record=await registryInstallation(env,installationId); if(!record?.squareConnected)return null;
+  const kv=registry(env); if(!kv)return null;
+  try{
+    const cipher=await kv.get(squareKey(installationId)); if(!cipher)return null;
+    const value=await decryptRegistryToken(env,cipher); if(!value)return null;
+    return JSON.parse(value);
+  }catch{return null}
+}
+async function saveSquareConnection(env,installationId,value){
+  const kv=registry(env); if(!kv)throw configurationError('CONNECT_INSTALLATIONS KV binding is not configured.');
+  await kv.put(squareKey(installationId),await encryptRegistryToken(env,JSON.stringify(value)));
+}
+async function clearSquareConnection(env,installationId){const kv=registry(env);if(kv)await kv.delete(squareKey(installationId))}
+async function squareToken(env,installationId){
+  const cfg=await squareConfig(env), connection=await squareConnection(env,installationId);
+  if(!connection?.accessToken||!connection?.refreshToken)return null;
+  const stale=!connection.updatedAt||Date.now()-new Date(connection.updatedAt).getTime()>7*86400000;
+  const expiring=!connection.expiresAt||new Date(connection.expiresAt).getTime()-Date.now()<7*86400000;
+  if(stale||expiring){
+    const r=await fetch(cfg.base+'/oauth2/token',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({client_id:cfg.clientId,client_secret:cfg.clientSecret,grant_type:'refresh_token',refresh_token:connection.refreshToken})});
+    let j={};try{j=await r.json()}catch{}
+    if(!r.ok||!j.access_token)throw new Error('Square access token refresh failed.');
+    connection.accessToken=j.access_token;connection.refreshToken=j.refresh_token||connection.refreshToken;connection.expiresAt=j.expires_at||connection.expiresAt;connection.updatedAt=new Date().toISOString();await saveSquareConnection(env,installationId,connection);
+  }
+  return {cfg,connection};
+}
+async function squareApi(env,installationId,path,{method='GET',body}={}){
+  const token=await squareToken(env,installationId); if(!token)throw Object.assign(new Error('Square is not connected for this installation.'),{status:409});
+  const r=await fetch(token.cfg.base+'/v2'+path,{method,headers:{authorization:'Bearer '+token.connection.accessToken,'content-type':'application/json','Square-Version':'2026-09-16'},body:body===undefined?undefined:JSON.stringify(body)});
+  let data={};try{data=await r.json()}catch{}
+  if(!r.ok)throw Object.assign(new Error(clean(data?.errors?.[0]?.detail||data?.errors?.[0]?.code||'Square API request failed.',500)),{status:r.status});
+  return data;
+}
+async function squareRefreshAll(env){
+  const kv=registry(env);if(!kv)return;
+  let cursor;
+  do{
+    const page=await kv.list({prefix:'installation:',cursor});
+    for(const key of page.keys||[]){
+      try{
+        const record=await registryInstallation(env,key.name.slice('installation:'.length));
+        if(record?.active&&record.squareConnected)await squareToken(env,record.installationId);
+      }catch{}
+    }
+    cursor=page.list_complete?undefined:page.cursor;
+  }while(cursor);
+}
 export {installationId,installationToken};
 async function pendingTrackingProof(token,trackingId){const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(token),{name:'HMAC',hash:'SHA-256'},false,['sign']);const signature=await crypto.subtle.sign('HMAC',key,new TextEncoder().encode(trackingId));return `${trackingId}.${base64url(String.fromCharCode(...new Uint8Array(signature)))}`}
 async function verifyPendingTracking(token,pending){const value=String(pending||''),separator=value.lastIndexOf('.');if(separator<1)return '';const trackingId=value.slice(0,separator),expected=await pendingTrackingProof(token,trackingId);return expected===value?trackingId:''}
@@ -75,10 +135,10 @@ async function paypalJson(env,path,{method='GET',merchantId='',body,requestId}={
   let j={};try{j=await r.json()}catch{}
   return {ok:r.ok,status:r.status,data:j};
 }
-export default {async fetch(req,env){
+export default {async scheduled(event,env){await squareRefreshAll(env)},async fetch(req,env){
   try{
     const url=new URL(req.url);
-    if(url.pathname==='/health')return json({ok:true,service:'OneArtist Connect',paypalEnvironment:env.PAYPAL_ENV==='live'?'live':'sandbox'});
+    if(url.pathname==='/health')return json({ok:true,service:'OneArtist Connect',paypalEnvironment:env.PAYPAL_ENV==='live'?'live':'sandbox',squareEnvironment:env.SQUARE_ENV==='sandbox'?'sandbox':'production',squareConfigured:!!(env.SQUARE_CLIENT_ID&&env.SQUARE_CLIENT_SECRET)});
     if(req.method==='POST'&&url.pathname==='/paypal/webhook')return receiveWebhook(req,env);
     let requestBody={};
     if(req.method==='POST'&&JSON_POST_ROUTES.has(url.pathname)){try{requestBody=await req.json()}catch{return json({ok:false,error:'Invalid JSON request body.'},400)}}
@@ -99,6 +159,8 @@ export default {async fetch(req,env){
     }
     if(req.method==='POST'&&url.pathname==='/onboard/start'){
       if(!(await installationAuthorized(req,env)))return json({ok:false,error:'Unauthorized installation.'},401);
+      const installation=await registryByToken(env,bearer(req));
+      if(installation?.squareConnected)return json({ok:false,error:'Disconnect Square before connecting PayPal.'},409);
       const b=requestBody,trackingId=clean(b.trackingId,120),returnUrl=clean(b.returnUrl,1000);
       if(!trackingId||!/^https:\/\//i.test(returnUrl))return json({ok:false,error:'trackingId and HTTPS returnUrl are required.'},400);
       const attribution=partnerAttribution(env),pp=await paypalAccess(env);
@@ -107,6 +169,69 @@ export default {async fetch(req,env){
       const r=await fetch(pp.base+'/v2/customer/partner-referrals',{method:'POST',headers,body:JSON.stringify(payload)});const j=await r.json();if(!r.ok)return json({ok:false,error:clean(j.message||'PayPal partner referral failed.',500),details:j.details||[]},r.status);
       const actionUrl=(j.links||[]).find(x=>x.rel==='action_url')?.href,self=(j.links||[]).find(x=>x.rel==='self')?.href;if(!actionUrl)return json({ok:false,error:'PayPal did not return an onboarding URL.'},502);
       return json({ok:true,actionUrl,self,trackingId:await pendingTrackingProof(bearer(req),trackingId)},201);
+    }
+    if(req.method==='POST'&&url.pathname==='/square/connect/start'){
+      const installation=await registryByToken(env,bearer(req));
+      if(!installation||!installation.active)return json({ok:false,error:'Unauthorized installation.'},401);
+      if(installation.merchantId)return json({ok:false,error:'Disconnect PayPal before connecting Square.'},409);
+      const b=requestBody,returnUrl=clean(b.returnUrl,1000);
+      if(!/^https:\/\//i.test(returnUrl))return json({ok:false,error:'HTTPS returnUrl is required.'},400);
+      const cfg=await squareConfig(env);
+      const state=bytesToB64url(crypto.getRandomValues(new Uint8Array(32)));
+      const kv=registry(env);if(!kv)throw configurationError('CONNECT_INSTALLATIONS KV binding is not configured.');
+      await kv.put(squareOAuthKey(state),JSON.stringify({installationId:installation.installationId,returnUrl,createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+10*60*1000).toISOString()}),{expirationTtl:600});
+      const scope=['MERCHANT_PROFILE_READ','PAYMENTS_READ','PAYMENTS_WRITE','ORDERS_READ','ORDERS_WRITE'].join(' ');
+      const authUrl=new URL(cfg.base+'/oauth2/authorize');authUrl.searchParams.set('client_id',cfg.clientId);authUrl.searchParams.set('scope',scope);authUrl.searchParams.set('session','false');authUrl.searchParams.set('state',state);authUrl.searchParams.set('redirect_uri',cfg.redirect);
+      return json({ok:true,actionUrl:authUrl.toString()});
+    }
+    if(req.method==='GET'&&url.pathname==='/square/oauth/callback'){
+      const cfg=await squareConfig(env),state=clean(url.searchParams.get('state'),200),code=clean(url.searchParams.get('code'),2048),denied=clean(url.searchParams.get('error'),100);
+      const kv=registry(env);let pending=null;try{pending=state?await kv.get(squareOAuthKey(state),'json'):null}catch{}
+      if(!pending||new Date(pending.expiresAt)<=new Date())return new Response('Square authorization expired. Please reconnect.',{status:400,headers:{'content-type':'text/plain'}});
+      await kv.delete(squareOAuthKey(state));
+      if(denied||!code)return Response.redirect(pending.returnUrl+'?square=denied',302);
+      const tokenResponse=await fetch(cfg.base+'/oauth2/token',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({client_id:cfg.clientId,client_secret:cfg.clientSecret,code,grant_type:'authorization_code',redirect_uri:cfg.redirect})});
+      let token={};try{token=await tokenResponse.json()}catch{}
+      if(!tokenResponse.ok||!token.access_token||!token.refresh_token)return new Response('Square authorization could not be completed.',{status:400,headers:{'content-type':'text/plain'}});
+      const record=await registryInstallation(env,pending.installationId);if(!record?.active)return new Response('OneArtist installation is not active.',{status:409,headers:{'content-type':'text/plain'}});
+      if(record.merchantId)return new Response('PayPal is already connected. Disconnect PayPal before using Square.',{status:409,headers:{'content-type':'text/plain'}});
+      const locationsResponse=await fetch(cfg.base+'/v2/locations',{headers:{authorization:'Bearer '+token.access_token,'Square-Version':'2026-09-16'}});
+      let locations={};try{locations=await locationsResponse.json()}catch{}
+      const location=(locations.locations||[]).find(x=>x.status==='ACTIVE')||(locations.locations||[])[0];
+      if(!location?.id)return new Response('Square connected, but no active Square location was returned.',{status:400,headers:{'content-type':'text/plain'}});
+      await saveSquareConnection(env,pending.installationId,{accessToken:token.access_token,refreshToken:token.refresh_token,expiresAt:token.expires_at||'',merchantId:token.merchant_id||'',locationId:location.id,locationName:location.name||'',scopes:token.scopes||[],updatedAt:new Date().toISOString(),connectedAt:new Date().toISOString()});
+      record.squareConnected=true;record.squareMerchantId=clean(token.merchant_id,191);record.squareLocationId=clean(location.id,64);record.updatedAt=new Date().toISOString();await putRegistryInstallation(env,record);
+      return Response.redirect(pending.returnUrl+'?square=connected',302);
+    }
+    if(req.method==='GET'&&url.pathname==='/square/status'){
+      const installation=await registryByToken(env,bearer(req));if(!installation||!installation.active)return json({ok:false,error:'Unauthorized installation.'},401);
+      const connection=await squareConnection(env,installation.installationId);
+      if(!connection)return json({ok:true,configured:!!env.SQUARE_CLIENT_ID,status:'not_connected',merchantId:'',locationId:'',environment:env.SQUARE_ENV==='sandbox'?'sandbox':'production'});
+      try{await squareApi(env,installation.installationId,'/locations');}catch(e){return json({ok:true,configured:true,status:'action_required',merchantId:connection.merchantId||'',locationId:connection.locationId||'',environment:env.SQUARE_ENV==='sandbox'?'sandbox':'production',error:clean(e.message,300)});}
+      return json({ok:true,configured:true,status:'connected',merchantId:connection.merchantId||'',locationId:connection.locationId||'',locationName:connection.locationName||'',environment:env.SQUARE_ENV==='sandbox'?'sandbox':'production'});
+    }
+    if(req.method==='POST'&&url.pathname==='/square/disconnect'){
+      const installation=await registryByToken(env,bearer(req));if(!installation||!installation.active)return json({ok:false,error:'Unauthorized installation.'},401);
+      const connection=await squareConnection(env,installation.installationId);if(connection){
+        const cfg=await squareConfig(env);
+        try{await fetch(cfg.base+'/oauth2/revoke',{method:'POST',headers:{authorization:'Client '+cfg.clientSecret,'content-type':'application/json'},body:JSON.stringify({client_id:cfg.clientId,access_token:connection.accessToken,revoke_only_access_token:false})})}catch{}
+      }
+      await clearSquareConnection(env,installation.installationId);
+      installation.squareConnected=false;installation.squareMerchantId='';installation.squareLocationId='';installation.updatedAt=new Date().toISOString();await putRegistryInstallation(env,installation);
+      return json({ok:true});
+    }
+    if(req.method==='POST'&&url.pathname==='/square/checkout'){
+      const installation=await registryByToken(env,bearer(req));if(!installation||!installation.active)return json({ok:false,error:'Unauthorized installation.'},401);
+      if(installation.merchantId)return json({ok:false,error:'PayPal is connected. Disconnect PayPal before using Square.'},409);
+      const connection=await squareConnection(env,installation.installationId);if(!connection)return json({ok:false,error:'Square is not connected.'},409);
+      const b=requestBody,body=b.body||{},data=await squareApi(env,installation.installationId,'/online-checkout/payment-links',{method:'POST',body});
+      return json({ok:true,paymentLink:data.payment_link||null,order:data.related_resources?.orders?.[0]||null});
+    }
+    if(req.method==='POST'&&url.pathname==='/square/order'){
+      const installation=await registryByToken(env,bearer(req));if(!installation||!installation.active)return json({ok:false,error:'Unauthorized installation.'},401);
+      const orderId=clean(requestBody.orderId,192);if(!orderId)return json({ok:false,error:'Missing Square order ID.'},400);
+      const data=await squareApi(env,installation.installationId,'/orders/'+encodeURIComponent(orderId));
+      return json({ok:true,order:data.order||null});
     }
     if(req.method==='POST'&&url.pathname==='/onboard/status'){
       if(!(await installationAuthorized(req,env)))return json({ok:false,error:'Unauthorized installation.'},401);
