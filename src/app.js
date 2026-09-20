@@ -319,7 +319,7 @@ function makeTrackDraft(order=1,releaseStatus='published'){
   return {id:`draft-track-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,title:'',audio:'',cover:'',duration:'',price:'',explicit:false,status:releaseStatus,trackNo:order,releaseId:''};
 }
 
-const NAV=[['dashboard','Dashboard','home'],['homepage','Homepage','pages'],['builder','Theme Builder','palette'],['release','Releases','music'],['video','Videos','video'],['tour','Tour Dates','calendar'],['product','Store','bag'],['orders','Orders','cart'],['customers','Customers','users'],['downloads','Downloads','download'],['page','Pages','pages'],['media','Media Library','image'],['themes','Themes','palette'],['settings','Settings','settings'],['security','Security','shield']];
+const NAV=[['dashboard','Dashboard','home'],['homepage','Homepage','pages'],['release','Releases','music'],['video','Videos','video'],['tour','Tour Dates','calendar'],['product','Store','bag'],['orders','Orders','cart'],['customers','Customers','users'],['downloads','Downloads','download'],['page','Pages','pages'],['media','Media Library','image'],['themes','Themes','palette'],['settings','Settings','settings'],['security','Security','shield']];
 function AdminShell({user,onLogout}){
   const [active,setActive]=useState('dashboard'),[menu,setMenu]=useState(false),[search,setSearch]=useState(''),[createRequest,setCreateRequest]=useState(null),[notifOpen,setNotifOpen]=useState(false),[notifications,setNotifications]=useState([]),[unread,setUnread]=useState(0);const [toast,show]=useToast();
   const select=k=>{setActive(k);setMenu(false);setNotifOpen(false)};
@@ -348,7 +348,6 @@ function AdminView({active,search,select,create,createRequest,onCreateHandled,sh
   if(active==='customers')return h(Customers,{show});
   if(active==='downloads')return h(DownloadsAdmin,{show});
   if(active==='themes')return h(Themes,{show});
-  if(active==='builder')return h(ThemeBuilder,{show});
   if(active==='security')return h(SecurityPanel,{show});
   return h(Settings,{show,focus:active==='homepage'?'homepage':'settings'});
 }
@@ -785,80 +784,13 @@ function TypeFields({type,data,setData,releases=[],onFetchYouTube,youtubeBusy=fa
   return null;
 }
 
-function defaultBuilder(){return [
-  {id:'hero-1',type:'hero',eyebrow:'FEATURED ARTIST',title:'YOUR ARTIST',subtitle:'NEW MUSIC. NEW STORIES.',image:'',primaryLabel:'Listen Now',secondaryLabel:'Watch',primaryHref:'/music',secondaryHref:'/videos'},
-  {id:'releases-1',type:'releases',title:'Latest Releases',limit:4},
-  {id:'two-1',type:'columns',columns:[[{id:'video-1',type:'videos',title:'Videos',limit:3}],[{id:'merch-1',type:'products',title:'Official Merch',limit:4}]]},
-  {id:'tour-1',type:'tour',title:'Upcoming Tour Dates',limit:6},
-  {id:'about-1',type:'about',title:'About the Artist',image:''},
-  {id:'newsletter-1',type:'newsletter',title:'Join the Movement',copy:'Get exclusive music, updates and announcements.'}
-]}
-const BUILDER_LIBRARY=[
-  ['hero','Hero Section','Full-width hero with its own image and CTAs.'],
-  ['releases','Releases','Existing OneArtistHub releases and player actions.'],
-  ['videos','Videos','Existing video library.'],
-  ['products','Merchandise','Existing store products and cart.'],
-  ['tour','Tour Dates','Existing upcoming tour dates.'],
-  ['about','Artist / About','Artist bio and image.'],
-  ['newsletter','Newsletter','Email signup section.'],
-  ['text','Text / Copy','Simple heading and paragraph.'],
-  ['columns','Two Columns','Place two components side by side.']
-];
-function makeBuilderBlock(type){
-  const id=`b-${type}-${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
-  if(type==='hero')return {id,type,eyebrow:'NEW MUSIC',title:'YOUR HEADLINE',subtitle:'Your artist message goes here.',image:'',primaryLabel:'Listen Now',secondaryLabel:'Watch',primaryHref:'/music',secondaryHref:'/videos'};
-  if(type==='columns')return {id,type,columns:[[],[]]};
-  if(type==='text')return {id,type,title:'Your Heading',copy:'Add your copy here.'};
-  if(type==='about')return {id,type,title:'About the Artist',image:''};
-  if(type==='newsletter')return {id,type,title:'Join the Movement',copy:'Get exclusive updates, music and more.'};
-  return {id,type,title:BUILDER_LIBRARY.find(x=>x[0]===type)?.[1]||type,limit:type==='products'?4:type==='tour'?6:3};
-}
-function blockLabel(type){return BUILDER_LIBRARY.find(x=>x[0]===type)?.[1]||type}
-function ThemeBuilder({show}){
-  const [settings,setSettings]=useState(null),[blocks,setBlocks]=useState([]),[selected,setSelected]=useState(null),[busy,setBusy]=useState(false),[dragIndex,setDragIndex]=useState(null),[nestedDrag,setNestedDrag]=useState(null),[message,setMessage]=useState('');
-  useEffect(()=>{api('admin/settings').then(d=>{setSettings(d.settings);setBlocks(Array.isArray(d.settings?.site?.builder)?d.settings.site.builder:defaultBuilder())}).catch(e=>show(e.message,true))},[]);
-  function add(type,targetIndex=null,column=null){const b=makeBuilderBlock(type);setBlocks(prev=>{const next=structuredClone(prev);if(column&&targetIndex!=null){const row=next[targetIndex];row.columns[column].push(b);return next}if(targetIndex==null)return [...next,b];next.splice(targetIndex,0,b);return next});setSelected(b.id);setMessage('Unsaved changes');}
-  function findBlock(list,id){for(const b of list){if(b.id===id)return b;if(b.type==='columns'){for(const col of b.columns||[]){const found=findBlock(col,id);if(found)return found}}}return null}
-  function updateBlock(id,patch){setBlocks(prev=>{const walk=list=>list.map(b=>{if(b.id===id)return {...b,...patch};if(b.type==='columns')return {...b,columns:(b.columns||[]).map(col=>walk(col))};return b});return walk(prev)});setMessage('Unsaved changes')}
-  function removeBlock(id){setBlocks(prev=>{const walk=list=>list.filter(b=>b.id!==id).map(b=>b.type==='columns'?{...b,columns:(b.columns||[]).map(col=>walk(col))}:b);return walk(prev)});if(selected===id)setSelected(null);setMessage('Unsaved changes')}
-  function moveBlock(index,delta){setBlocks(prev=>{const next=[...prev],to=index+delta;if(to<0||to>=next.length)return next;[next[index],next[to]]=[next[to],next[index]];return next});setMessage('Unsaved changes')}
-  function dropTop(target){if(dragIndex==null||dragIndex===target)return;setBlocks(prev=>{const next=[...prev],item=next.splice(dragIndex,1)[0];next.splice(target,0,item);return next});setDragIndex(null);setMessage('Unsaved changes')}
-  function removeNested(rowIndex,col,itemId){setBlocks(prev=>{const next=structuredClone(prev);next[rowIndex].columns[col]=next[rowIndex].columns[col].filter(x=>x.id!==itemId);return next});setMessage('Unsaved changes')}
-  function moveNested(targetRow,targetCol){if(!nestedDrag)return;const {rowIndex:fromRow,col:fromCol,itemId}=nestedDrag;if(fromRow===targetRow&&fromCol===targetCol)return;setBlocks(prev=>{const next=structuredClone(prev);const item=next[fromRow]?.columns?.[fromCol]?.find(x=>x.id===itemId);if(!item)return next;next[fromRow].columns[fromCol]=next[fromRow].columns[fromCol].filter(x=>x.id!==itemId);next[targetRow].columns[targetCol].push(item);return next});setNestedDrag(null);setMessage('Unsaved changes')}
-  function updateNested(rowIndex,col,itemId,patch){setBlocks(prev=>{const next=structuredClone(prev);const item=next[rowIndex].columns[col].find(x=>x.id===itemId);if(item)Object.assign(item,patch);return next});setMessage('Unsaved changes')}
-  async function save(){setBusy(true);try{const site={...(settings?.site||{}),publicTheme:'builder',builder:blocks};const d=await api('admin/settings',{method:'PUT',body:JSON.stringify({settings:{site}})});setSettings(d.settings);setMessage('Saved. Your custom homepage is live.');show('Theme layout saved and activated.')}catch(e){show(e.message,true)}finally{setBusy(false)}}
-  function reset(){if(!confirm('Reset the builder to the starter layout?'))return;const b=defaultBuilder();setBlocks(b);setSelected(null);setMessage('Unsaved changes')}
-  if(!settings)return h('div',{className:'empty'},'Loading Theme Builder…');
-  const current=selected?findBlock(blocks,selected):null;
-  const editPanel=current&&current.type!=='columns'?h('section',{className:'card form-card builder-editor'},
-    h('div',{className:'row between'},h('h3',null,`Edit ${blockLabel(current.type)}`),h(Button,{className:'compact',icon:'trash',onClick:()=>removeBlock(current.id)},'Remove')),
-    current.type==='hero'&&h(React.Fragment,null,
-      h('div',{className:'grid2'},h(Field,{label:'Eyebrow'},h(Input,{value:current.eyebrow||'',onChange:e=>updateBlock(current.id,{eyebrow:e.target.value})})),h(Field,{label:'Headline'},h(Input,{value:current.title||'',onChange:e=>updateBlock(current.id,{title:e.target.value})})),h(Field,{label:'Subtitle'},h(Textarea,{value:current.subtitle||'',onChange:e=>updateBlock(current.id,{subtitle:e.target.value})})),h(AssetField,{label:'Hero image',value:current.image||'',onChange:v=>updateBlock(current.id,{image:v}),show,folder:'hero',kind:'image'}),h(Field,{label:'Primary button'},h(Input,{value:current.primaryLabel||'',onChange:e=>updateBlock(current.id,{primaryLabel:e.target.value})})),h(Field,{label:'Primary URL'},h(Input,{value:current.primaryHref||'',onChange:e=>updateBlock(current.id,{primaryHref:e.target.value})})),h(Field,{label:'Secondary button'},h(Input,{value:current.secondaryLabel||'',onChange:e=>updateBlock(current.id,{secondaryLabel:e.target.value})})),h(Field,{label:'Secondary URL'},h(Input,{value:current.secondaryHref||'',onChange:e=>updateBlock(current.id,{secondaryHref:e.target.value})}))
-    ),
-    ['releases','videos','products','tour'].includes(current.type)&&h('div',{className:'grid2'},h(Field,{label:'Section title'},h(Input,{value:current.title||'',onChange:e=>updateBlock(current.id,{title:e.target.value})})),h(Field,{label:'Items to show'},h(Input,{type:'number',min:1,max:12,value:current.limit||4,onChange:e=>updateBlock(current.id,{limit:Math.max(1,Math.min(12,Number(e.target.value)||1))})}))),
-    current.type==='about'&&h('div',{className:'grid2'},h(Field,{label:'Section title'},h(Input,{value:current.title||'',onChange:e=>updateBlock(current.id,{title:e.target.value})})),h(AssetField,{label:'Background image',value:current.image||'',onChange:v=>updateBlock(current.id,{image:v}),show,folder:'artist',kind:'image'})),
-    current.type==='newsletter'&&h('div',{className:'grid2'},h(Field,{label:'Heading'},h(Input,{value:current.title||'',onChange:e=>updateBlock(current.id,{title:e.target.value})})),h(Field,{label:'Copy'},h(Textarea,{value:current.copy||'',onChange:e=>updateBlock(current.id,{copy:e.target.value})}))),
-    current.type==='text'&&h('div',{className:'grid2'},h(Field,{label:'Heading'},h(Input,{value:current.title||'',onChange:e=>updateBlock(current.id,{title:e.target.value})})),h(Field,{label:'Copy'},h(Textarea,{value:current.copy||'',onChange:e=>updateBlock(current.id,{copy:e.target.value})}))))
-  ):null;
-  const renderNested=(row,col)=>row.columns[col].map(item=>h('div',{className:'builder-nested-item',key:item.id,draggable:true,onDragStart:e=>{e.stopPropagation();setNestedDrag({rowIndex:blocks.indexOf(row),col,itemId:item.id});e.dataTransfer.setData('text/plain',item.id)}},h('div',{className:'row between'},h('span',null,h(Icon,{name:'menu',size:15}),blockLabel(item.type)),h('div',{className:'row'},h(IconButton,{icon:'edit',label:'Edit',onClick:()=>setSelected(item.id)}),h(IconButton,{icon:'trash',label:'Remove',onClick:()=>removeBlock(item.id)})))))
-  const canvas=blocks.map((b,i)=>b.type==='columns'?h('article',{key:b.id,className:'builder-block builder-columns',onClick:()=>setSelected(b.id)},h('div',{className:'builder-block-head'},h('strong',null,'Two Columns'),h('div',{className:'row'},h(IconButton,{icon:'up',label:'Move up',onClick:e=>{e.stopPropagation();moveBlock(i,-1)} }),h(IconButton,{icon:'down',label:'Move down',onClick:e=>{e.stopPropagation();moveBlock(i,1)}}),h(IconButton,{icon:'trash',label:'Remove',onClick:e=>{e.stopPropagation();removeBlock(b.id)}}))),h('div',{className:'builder-columns-grid'},[0,1].map(col=>h('div',{key:col,className:'builder-column',onDragOver:e=>e.preventDefault(),onDrop:e=>{e.preventDefault();moveNested(i,col)}},h('div',{className:'small muted'},`Column ${col+1}`),renderNested(b,col),h('div',{className:'builder-drop-zone'},h('span',null,'Add component'),h('div',{className:'builder-add-mini'},BUILDER_LIBRARY.filter(x=>!['columns','hero'].includes(x[0])).map(x=>h('button',{key:x[0],onClick:e=>{e.stopPropagation();add(x[0],i,col)}},'+ '+x[1])))))))):
-    h('article',{key:b.id,className:`builder-block ${selected===b.id?'selected':''}`,draggable:true,onDragStart:()=>setDragIndex(i),onDragOver:e=>{e.preventDefault();e.currentTarget.classList.add('drag-over')},onDragLeave:e=>e.currentTarget.classList.remove('drag-over'),onDrop:e=>{e.preventDefault();e.currentTarget.classList.remove('drag-over');dropTop(i)},onClick:()=>setSelected(b.id)},h('div',{className:'builder-block-head'},h('div',{className:'row'},h(Icon,{name:'menu',size:17}),h('strong',null,blockLabel(b.type))),h('div',{className:'row'},h(IconButton,{icon:'up',label:'Move up',onClick:e=>{e.stopPropagation();moveBlock(i,-1)}}),h(IconButton,{icon:'down',label:'Move down',onClick:e=>{e.stopPropagation();moveBlock(i,1)}}),h(IconButton,{icon:'edit',label:'Edit',onClick:e=>{e.stopPropagation();setSelected(b.id)}}),h(IconButton,{icon:'trash',label:'Remove',onClick:e=>{e.stopPropagation();removeBlock(b.id)}}))),h('div',{className:'builder-block-preview'},b.type==='hero'?'Full-width hero section':b.type==='text'?(b.title||'Text section'):b.type==='newsletter'?'Newsletter signup':`Uses existing ${blockLabel(b.type).toLowerCase()} data`)));
-  return h(React.Fragment,null,
-    h(PageHead,{title:'Theme Builder',subtitle:'Drag sections into order, add multiple heroes, or build two-column rows. Everything stays responsive.',actions:h('div',{className:'row wrap'},h(Button,{icon:'repeat',onClick:reset},'Reset'),h(Button,{variant:'primary',icon:'save',disabled:busy,onClick:save},busy?'Saving…':'Save & Activate'))}),
-    h('div',{className:'builder-layout'},
-      h('aside',{className:'builder-library card'},h('h3',null,'Add Sections'),h('p',{className:'small muted'},'Click to add. Drag the canvas blocks to reorder.'),h('div',{className:'builder-library-list'},BUILDER_LIBRARY.map(([type,label,desc])=>h('button',{key:type,className:'builder-library-item',onClick:()=>add(type)},h(Icon,{name:type==='columns'?'queue':type==='hero'?'expand':'plus'}),h('span',null,h('strong',null,label),h('small',null,desc))))),message&&h('div',{className:'builder-save-state'},message)),
-      h('section',{className:'builder-canvas'},h('div',{className:'builder-canvas-head'},h('strong',null,'Homepage layout'),h('span',{className:'small muted'},`${blocks.length} section${blocks.length===1?'':'s'}`)),canvas),
-      h('aside',{className:'builder-inspector'},editPanel||h('div',{className:'card builder-empty-inspector'},h(Icon,{name:'edit',size:28}),h('strong',null,'Select a section'),h('p',{className:'small muted'},'Click a block in the canvas to edit its content.')))
-    )
-  );
-}
 function Themes({show}){
   const [settings,setSettings]=useState(null),[busy,setBusy]=useState('');
   const themes=[
     {key:'midnight',name:'Midnight Cinema',desc:'Cinematic black, glass and luxury release presentation.',cls:'midnight'},
     {key:'os',name:'Artist OS',desc:'Futuristic app-like artist operating system.',cls:'os'},
     {key:'neon',name:'Neon Editorial',desc:'Bold asymmetrical neon editorial presentation.',cls:'neon'},
-    {key:'builder',name:'Custom Builder',desc:'Build your homepage from reusable sections without code.',cls:'builder'}
+    {key:'cartel',name:'Cartel Full Width',desc:'Edge-to-edge street-luxury artist presentation inspired by the T. Cartel mockup.',cls:'cartel'}
   ];
   useEffect(()=>{api('admin/settings').then(d=>setSettings(d.settings)).catch(e=>show(e.message,true))},[]);
   async function activate(key){
@@ -868,24 +800,30 @@ function Themes({show}){
       const site={...(settings.site||{}),publicTheme:key};
       const d=await api('admin/settings',{method:'PUT',body:JSON.stringify({settings:{site}})});
       setSettings(d.settings);
-      show(`${themes.find(t=>t.key===key)?.name||'Theme'} activated.`);
+      show(`${themes.find(t=>t.key===key)?.name||'Theme'} activated. The public site changes immediately.`);
     }catch(e){show(e.message,true)}finally{setBusy('')}
   }
   if(!settings)return h('div',{className:'empty'},'Loading themes…');
   const active=settings.site?.publicTheme||'midnight';
   const cards=themes.map(t=>{
-    const controls=h('div',{className:'row wrap'},
+    const actions=h('div',{className:'row wrap'},
       h('a',{className:'btn',href:`/?themePreview=${t.key}`,target:'_blank',rel:'noopener'},h(Icon,{name:'eye'}),' Preview'),
-      t.key==='builder'&&h(Button,{className:'compact',icon:'edit',onClick:()=>{window.dispatchEvent(new CustomEvent('oah:open-builder'));show('Use Theme Builder from the sidebar to edit the layout.')}},'Open Builder'),
       h(Button,{variant:active===t.key?'':'primary',icon:active===t.key?'check':'palette',disabled:active===t.key||!!busy,onClick:()=>activate(t.key)},busy===t.key?'Activating…':active===t.key?'Active':'Activate')
     );
     return h('article',{className:'theme-card card '+(active===t.key?'theme-active':''),key:t.key},
-      h('div',{className:'theme-preview '+t.cls},h('div',{className:'theme-mini-nav'}),h('div',{className:'theme-mini-copy'},h('span'),h('strong',null,t.name),h('i'))),
-      h('div',{className:'card-copy'},h('div',{className:'row between'},h('h3',null,t.name),active===t.key&&h('span',{className:'pill success'},'Active')),h('p',{className:'small muted'},t.desc),controls)
+      h('div',{className:'theme-preview '+t.cls},
+        h('div',{className:'theme-mini-nav'}),
+        h('div',{className:'theme-mini-copy'},h('span'),h('strong',null,t.name),h('i'))
+      ),
+      h('div',{className:'card-copy'},
+        h('div',{className:'row between'},h('h3',null,t.name),active===t.key&&h('span',{className:'pill success'},'Active')),
+        h('p',{className:'small muted'},t.desc),
+        actions
+      )
     );
   });
   return h(React.Fragment,null,
-    h(PageHead,{title:'Themes',subtitle:'Switch the public artist website instantly. Use Custom Builder for a visual homepage layout.'}),
+    h(PageHead,{title:'Themes',subtitle:'Switch the public artist website instantly. No rebuild or redeploy required.',actions:h('a',{className:'btn',href:'/',target:'_blank',rel:'noopener'},h(Icon,{name:'external'}),' Open Live Site')}),
     h('div',{className:'theme-cards'},cards)
   );
 }
@@ -1127,7 +1065,7 @@ function PublicSite({path,nav}){
   if(!data)return h('div',{className:'auth-page'},h('div',{className:'auth-box card'},h('img',{src:'/art/oneartist-logo.svg',className:'auth-logo'}),h('p',{className:'lead'},'Loading artist website…')),h(Toast,{toast}));
   const s=data.settings||{},content=data.content||[],artist=s.artist||{},site=s.site||{};
   const previewTheme=new URLSearchParams(location.search).get('themePreview');
-  const theme=['midnight','os','neon','builder'].includes(previewTheme)?previewTheme:(site.publicTheme||'midnight');
+  const theme=['midnight','os','neon','cartel'].includes(previewTheme)?previewTheme:(site.publicTheme||'midnight');
   const tracks=content.filter(x=>x.type==='track').sort((a,b)=>(Number(a.data.trackNo)||0)-(Number(b.data.trackNo)||0));
   const allReleases=content.filter(x=>x.type==='release');
   const allVideos=content.filter(x=>x.type==='video');
@@ -1149,7 +1087,7 @@ function PublicSite({path,nav}){
   function playTrackByRelease(rel){playRelease(rel)}
   const brand=site.logoUrl?h('img',{src:site.logoUrl,alt:artist.name||site.title||'Artist',className:'public-artist-logo'}):h('span',{className:'public-artist-brand'},site.title||artist.name||'Artist');
   return h('div',{className:'public '+theme},
-    previewTheme&&h('div',{className:'theme-preview-banner'},h(Icon,{name:'eye'}),` Previewing ${previewTheme==='os'?'Artist OS':previewTheme==='neon'?'Neon Editorial':previewTheme==='builder'?'Custom Builder':'Midnight Cinema'} — activation is controlled from OneArtist Hub Admin.`),
+    previewTheme&&h('div',{className:'theme-preview-banner'},h(Icon,{name:'eye'}),` Previewing ${previewTheme==='os'?'Artist OS':previewTheme==='neon'?'Neon Editorial':previewTheme==='cartel'?'Cartel Full Width':'Midnight Cinema'} — activation is controlled from OneArtist Hub Admin.`),
     h('header',{className:'public-nav'},h('a',{href:'/',className:'public-brand-link',onClick:e=>{e.preventDefault();go('/')}},brand),h('nav',{className:'public-links'},links.map(([to,label])=>h('a',{key:to,href:to,onClick:e=>{e.preventDefault();go(to)}},label))),h(IconButton,{icon:mobileNav?'close':'menu',label:'Toggle navigation',className:'mobile-public-menu',onClick:()=>setMobileNav(v=>!v)})),
     mobileNav&&h('nav',{className:'mobile-public-panel'},links.map(([to,label])=>h('a',{key:to,href:to,onClick:e=>{e.preventDefault();go(to)}},label))),
     custom?h(CustomPage,{page:custom}):route==='/music'?h(ReleaseMusicPage,{releases:allReleases,playRelease}):route==='/videos'?h(VideosPage,{videos:allVideos,openVideo}):route==='/tour'?h(TourPage,{tours:allTours}):route==='/shop'?h(ShopPage,{products:allProducts,addCart}):h(HomePage,{theme,site,artist,releases:homeReleases,videos:homeVideos,tours:homeTours,products:homeProducts,openVideo,addCart,playTrackByRelease}),
@@ -1160,48 +1098,57 @@ function PublicSite({path,nav}){
 
 function HomePage({theme,site,artist,releases,videos,tours,products,openVideo,addCart,playTrackByRelease}){
   const common={site,artist,releases,videos,tours,products,openVideo,addCart,playTrackByRelease};
-  if(theme==='builder')return h(BuilderHome,common);
   if(theme==='os')return h(ArtistOSHome,common);
   if(theme==='neon')return h(NeonEditorialHome,common);
+  if(theme==='cartel')return h(CartelFullWidthHome,common);
   return h(MidnightCinemaHome,common);
 }
-function BuilderHome({site,artist,releases,videos,tours,products,openVideo,addCart,playTrackByRelease}){
-  const blocks=Array.isArray(site.builder)&&site.builder.length?site.builder:defaultBuilder();
-  function navTo(url){
-    if(String(url||'').startsWith('/')){history.pushState({},'',url);dispatchEvent(new PopStateEvent('popstate'));scrollTo(0,0)}
-    else if(url)location.href=url;
-  }
-  function showBuilderMessage(text){
-    const el=document.createElement('div');el.className='toast';el.textContent=text;document.body.appendChild(el);setTimeout(()=>el.remove(),2600);
-  }
-  function renderBlock(b,keyPrefix=''){
-    const key=b.id||`${keyPrefix}${b.type}`;
-    if(b.type==='hero'){
-      const actions=[];
-      if(b.primaryLabel)actions.push(h(Button,{key:'primary',variant:'primary',onClick:()=>navTo(b.primaryHref||'/music')},b.primaryLabel));
-      if(b.secondaryLabel)actions.push(h('a',{key:'secondary',className:'btn',href:b.secondaryHref||'/videos'},b.secondaryLabel));
-      return h('section',{key,className:'builder-public-hero',style:{backgroundImage:`linear-gradient(90deg,rgba(0,0,0,.78),rgba(0,0,0,.12)),url('${b.image||site.heroImage||'/art/hero-aurora.svg'}')`}},
-        h('div',{className:'builder-hero-inner'},
-          h('span',{className:'builder-eyebrow'},b.eyebrow||'FEATURED ARTIST'),
-          h('h1',null,b.title||artist.name||site.title||'ARTIST'),
-          h('p',null,b.subtitle||site.heroSubtitle||artist.bio||''),
-          h('div',{className:'row wrap'},actions)
-        )
-      );
-    }
-    if(b.type==='releases')return h('section',{key,className:'builder-public-section'},h('div',{className:'builder-public-head'},h('h2',null,b.title||'Latest Releases')),h(ReleaseSection,{releases:releases.slice(0,Number(b.limit)||4),onPlay:playTrackByRelease}));
-    if(b.type==='videos')return h('section',{key,className:'builder-public-section'},h('div',{className:'builder-public-head'},h('h2',null,b.title||'Videos')),h(VideoSection,{videos:videos.slice(0,Number(b.limit)||3),onOpen:openVideo}));
-    if(b.type==='products')return h('section',{key,className:'builder-public-section'},h('div',{className:'builder-public-head'},h('h2',null,b.title||'Merchandise')),h(ProductSection,{products:products.slice(0,Number(b.limit)||4),onAdd:addCart}));
-    if(b.type==='tour')return h('section',{key,className:'builder-public-section'},h('div',{className:'builder-public-head'},h('h2',null,b.title||'Tour Dates')),h(TourSection,{tours:tours.slice(0,Number(b.limit)||6)}));
-    if(b.type==='about')return h('section',{key,className:'builder-public-about',style:{backgroundImage:`linear-gradient(90deg,rgba(0,0,0,.78),rgba(0,0,0,.25)),url('${b.image||site.heroImage||'/art/hero-aurora.svg'}')`}},h('div',{className:'builder-about-inner'},h('span',{className:'builder-eyebrow'},'ABOUT THE ARTIST'),h('h2',null,b.title||'About the Artist'),h('p',null,artist.bio||site.heroSubtitle||'Music. Hustle. Legacy.')));
-    if(b.type==='newsletter')return h('section',{key,className:'builder-public-newsletter'},h('div',null,h('span',{className:'builder-eyebrow'},'STAY CONNECTED'),h('h2',null,b.title||'Join the Movement'),h('p',null,b.copy||'Get exclusive updates, music and more.')),h('form',{onSubmit:e=>{e.preventDefault();showBuilderMessage('Newsletter signup is ready to connect.')}},h('input',{type:'email',required:true,placeholder:'Enter your email'}),h(Button,{variant:'primary',type:'submit'},'Subscribe')));
-    if(b.type==='text')return h('section',{key,className:'builder-public-text'},h('h2',null,b.title||'Your Heading'),h('p',null,b.copy||''));
-    if(b.type==='columns'){
-      return h('section',{key,className:'builder-public-columns'},[0,1].map(col=>h('div',{key:col,className:'builder-public-column'},(b.columns?.[col]||[]).map(item=>renderBlock(item,key+col)))));
-    }
-    return null;
-  }
-  return h('main',{className:'builder-public-home'},blocks.map(b=>renderBlock(b)));
+function CartelFullWidthHome({site,artist,releases,tours,products,addCart,playTrackByRelease}){
+  const featured=releases[0];
+  const promo=products[0];
+  const heroImage=site.heroImage||featured?.data.cover||'/art/hero-aurora.svg';
+  const logo=site.logoUrl||'';
+  const title=site.heroTitle||artist.name||site.title||'ARTIST';
+  const subtitle=site.heroSubtitle||featured?.title||'THE LAST ONE LEFT';
+  const artistName=artist.name||site.title||'ARTIST';
+  return h('main',{className:'theme-home cartel-home'},
+    h('section',{className:'ct-hero',style:{backgroundImage:`linear-gradient(90deg,rgba(0,0,0,.88),rgba(0,0,0,.46) 48%,rgba(0,0,0,.12)),linear-gradient(0deg,rgba(0,0,0,.72),transparent 42%),url('${heroImage}')`}},
+      h('div',{className:'ct-hero-inner'},
+        h('div',{className:'ct-kicker'},'NEW ALBUM'),
+        h('h1',null,title),
+        h('div',{className:'ct-subtitle'},subtitle),
+        h('p',null,artist.bio||'The journey, the pain. The grind. The One Left.'),
+        h('p',{className:'ct-stream-copy'},'Stream now on all platforms.'),
+        h('div',{className:'ct-actions'},h(Button,{variant:'primary',icon:'play',onClick:()=>featured&&playTrackByRelease(featured)},'Stream Now'),h(Button,{icon:'play',onClick:()=>featured&&playTrackByRelease(featured)},'Watch Visualizer'))
+      )
+    ),
+    h('section',{className:'ct-section'},
+      h('div',{className:'ct-heading'},h('h2',null,'LATEST RELEASES'),h('a',{href:'/music'},'VIEW ALL')),
+      h(ReleaseSection,{releases,onPlay:playTrackByRelease})
+    ),
+    h('section',{className:'ct-promo',style:{backgroundImage:`linear-gradient(90deg,rgba(0,0,0,.82),rgba(0,0,0,.24)),url('${promo?.data.image||heroImage}')`}},
+      h('div',{className:'ct-promo-copy'},h('span',null,'NEW MERCH DROP'),h('h2',null,promo?.title||'STAY SOLID'),h('p',null,'Exclusive Hoodies, Tees & More'),h('a',{className:'btn primary',href:'/shop'},'SHOP NOW'))
+    ),
+    h('section',{className:'ct-section'},
+      h('div',{className:'ct-heading'},h('h2',null,'OFFICIAL MERCHANDISE'),h('a',{href:'/shop'},'VIEW ALL')),
+      h(ProductSection,{products,onAdd:addCart})
+    ),
+    h('section',{className:'ct-section ct-tour'},
+      h('div',{className:'ct-heading'},h('h2',null,'TOUR DATES'),h('a',{href:'/tour'},'VIEW ALL')),
+      h('div',{className:'ct-tour-list'},tours.length?tours.slice(0,5).map(t=>h('div',{className:'ct-tour-row',key:t.id},
+        h('strong',null,fmtDate(t.sort_date).toUpperCase()),
+        h('strong',null,t.data.city||t.title||''),
+        h('span',null,t.data.venue||''),
+        t.data.ticketUrl&&h('a',{className:'btn primary',href:t.data.ticketUrl,target:'_blank',rel:'noopener'},'GET TICKETS')
+      )):h('div',{className:'empty'},'No upcoming shows.'))
+    ),
+    h('section',{className:'ct-footer-poster',style:{backgroundImage:`linear-gradient(90deg,rgba(0,0,0,.88),rgba(0,0,0,.35)),url('${heroImage}')`}},
+      h('div',null,logo&&h('img',{src:logo,alt:artistName,className:'ct-footer-logo'}),!logo&&h('strong',null,artistName),h('p',null,'Music. Hustle. Legacy.'),h('div',{className:'ct-socials'},['IG','X','YT','TT'].map(x=>h('a',{key:x,href:'#',title:x},x)))),
+      h('div',null,h('span',null,'JOIN THE MOVEMENT'),h('p',null,'Get exclusive updates, music and more.'),h('div',{className:'ct-newsletter'},h('input',{type:'email',placeholder:'Enter your email','aria-label':'Email address'}),h('button',{type:'button',className:'btn primary'},'SUBSCRIBE')))
+    ),
+    h('nav',{className:'ct-footer-nav'},['Home','Music','Merch','Tour','About','Contact','Privacy','Terms'].map((x,i)=>h('a',{key:x,href:['/','/music','/shop','/tour','#about','#contact','#privacy','#terms'][i]},x))),
+    h('div',{className:'ct-copyright'},`© ${new Date().getFullYear()} ${artistName}. All rights reserved.`)
+  );
 }
 
 function MidnightCinemaHome({site,artist,releases,videos,tours,products,openVideo,addCart,playTrackByRelease}){
