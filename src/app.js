@@ -319,7 +319,7 @@ function makeTrackDraft(order=1,releaseStatus='published'){
   return {id:`draft-track-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,title:'',audio:'',cover:'',duration:'',price:'',explicit:false,status:releaseStatus,trackNo:order,releaseId:''};
 }
 
-const NAV=[['dashboard','Dashboard','home'],['homepage','Homepage','pages'],['builder','Theme Builder','palette'],['release','Releases','music']],['video','Videos','video'],['tour','Tour Dates','calendar'],['product','Store','bag'],['orders','Orders','cart'],['customers','Customers','users'],['downloads','Downloads','download'],['page','Pages','pages'],['media','Media Library','image'],['themes','Themes','palette'],['settings','Settings','settings'],['security','Security','shield']];
+const NAV=[['dashboard','Dashboard','home'],['homepage','Homepage','pages'],['builder','Theme Builder','palette'],['release','Releases','music'],['video','Videos','video'],['tour','Tour Dates','calendar'],['product','Store','bag'],['orders','Orders','cart'],['customers','Customers','users'],['downloads','Downloads','download'],['page','Pages','pages'],['media','Media Library','image'],['themes','Themes','palette'],['settings','Settings','settings'],['security','Security','shield']];
 function AdminShell({user,onLogout}){
   const [active,setActive]=useState('dashboard'),[menu,setMenu]=useState(false),[search,setSearch]=useState(''),[createRequest,setCreateRequest]=useState(null),[notifOpen,setNotifOpen]=useState(false),[notifications,setNotifications]=useState([]),[unread,setUnread]=useState(0);const [toast,show]=useToast();
   const select=k=>{setActive(k);setMenu(false);setNotifOpen(false)};
@@ -858,8 +858,7 @@ function Themes({show}){
     {key:'midnight',name:'Midnight Cinema',desc:'Cinematic black, glass and luxury release presentation.',cls:'midnight'},
     {key:'os',name:'Artist OS',desc:'Futuristic app-like artist operating system.',cls:'os'},
     {key:'neon',name:'Neon Editorial',desc:'Bold asymmetrical neon editorial presentation.',cls:'neon'},
-    {key:'builder',name:'Custom Builder',desc:'Build your homepage from reusable sections without code.',cls:'builder'},
-    {key:'cartel',name:'Cartel Full Width',desc:'Edge-to-edge street-luxury artist presentation inspired by the T. Cartel mockup.',cls:'cartel'}
+    {key:'builder',name:'Custom Builder',desc:'Build your homepage from reusable sections without code.',cls:'builder'}
   ];
   useEffect(()=>{api('admin/settings').then(d=>setSettings(d.settings)).catch(e=>show(e.message,true))},[]);
   async function activate(key){
@@ -869,30 +868,24 @@ function Themes({show}){
       const site={...(settings.site||{}),publicTheme:key};
       const d=await api('admin/settings',{method:'PUT',body:JSON.stringify({settings:{site}})});
       setSettings(d.settings);
-      show(`${themes.find(t=>t.key===key)?.name||'Theme'} activated. The public site changes immediately.`);
+      show(`${themes.find(t=>t.key===key)?.name||'Theme'} activated.`);
     }catch(e){show(e.message,true)}finally{setBusy('')}
   }
   if(!settings)return h('div',{className:'empty'},'Loading themes…');
   const active=settings.site?.publicTheme||'midnight';
   const cards=themes.map(t=>{
-    const actions=h('div',{className:'row wrap'},
+    const controls=h('div',{className:'row wrap'},
       h('a',{className:'btn',href:`/?themePreview=${t.key}`,target:'_blank',rel:'noopener'},h(Icon,{name:'eye'}),' Preview'),
+      t.key==='builder'&&h(Button,{className:'compact',icon:'edit',onClick:()=>{window.dispatchEvent(new CustomEvent('oah:open-builder'));show('Use Theme Builder from the sidebar to edit the layout.')}},'Open Builder'),
       h(Button,{variant:active===t.key?'':'primary',icon:active===t.key?'check':'palette',disabled:active===t.key||!!busy,onClick:()=>activate(t.key)},busy===t.key?'Activating…':active===t.key?'Active':'Activate')
     );
     return h('article',{className:'theme-card card '+(active===t.key?'theme-active':''),key:t.key},
-      h('div',{className:'theme-preview '+t.cls},
-        h('div',{className:'theme-mini-nav'}),
-        h('div',{className:'theme-mini-copy'},h('span'),h('strong',null,t.name),h('i'))
-      ),
-      h('div',{className:'card-copy'},
-        h('div',{className:'row between'},h('h3',null,t.name),active===t.key&&h('span',{className:'pill success'},'Active')),
-        h('p',{className:'small muted'},t.desc),
-        actions
-      )
+      h('div',{className:'theme-preview '+t.cls},h('div',{className:'theme-mini-nav'}),h('div',{className:'theme-mini-copy'},h('span'),h('strong',null,t.name),h('i'))),
+      h('div',{className:'card-copy'},h('div',{className:'row between'},h('h3',null,t.name),active===t.key&&h('span',{className:'pill success'},'Active')),h('p',{className:'small muted'},t.desc),controls)
     );
   });
   return h(React.Fragment,null,
-    h(PageHead,{title:'Themes',subtitle:'Switch the public artist website instantly. No rebuild or redeploy required.',actions:h('a',{className:'btn',href:'/',target:'_blank',rel:'noopener'},h(Icon,{name:'external'}),' Open Live Site')}),
+    h(PageHead,{title:'Themes',subtitle:'Switch the public artist website instantly. Use Custom Builder for a visual homepage layout.'}),
     h('div',{className:'theme-cards'},cards)
   );
 }
@@ -966,8 +959,8 @@ function DownloadsAdmin({show}){
 }
 
 function Settings({show,focus}){
-  const [settings,setSettings]=useState(null),[ints,setInts]=useState([]),[paypalConnect,setPaypalConnect]=useState({available:false,status:'not_connected',merchantId:''}),[squareConnect,setSquareConnect]=useState({configured:false,status:'not_connected',merchantId:'',locationId:''}),[dropbox,setDropbox]=useState({accessToken:''}),[s3,setS3]=useState({endpoint:'',region:'us-east-1',bucket:'',accessKeyId:'',secretAccessKey:'',forcePathStyle:true}),[emailCfg,setEmailCfg]=useState({service:'resend',apiKey:'',apiToken:'',accountId:'',smtpHost:'',smtpPort:587,smtpSecure:false,smtpUser:'',smtpPassword:'',fromName:'',fromEmail:'',replyTo:'',configured:false,smtpAvailable:false}),[emailQueue,setEmailQueue]=useState([]),[prefs,setPrefs]=useState(null),[testTo,setTestTo]=useState(''),[webhooks,setWebhooks]=useState([]),[storage,setStorage]=useState({provider:'dropbox',r2Bound:false,dropboxConfigured:false,s3Configured:false,localAvailable:false}),[busy,setBusy]=useState('');
-  const load=useCallback(()=>Promise.all([api('admin/settings'),api('admin/integrations'),api('admin/email/config'),api('admin/notification-preferences'),api('admin/webhooks'),api('admin/storage/status'),api('admin/paypal/connect/status'),api('admin/square/connect/status'),api('admin/email/queue')]).then(([stg,i,e,n,w,st,pc,sc,eq])=>{setSettings(stg.settings);setInts(i.integrations||[]);setEmailCfg(x=>({...x,...e,apiKey:'',apiToken:'',smtpPassword:''}));setPrefs(n.preferences);setTestTo(e.fromEmail||'');setWebhooks(w.events||[]);setStorage(st);setPaypalConnect(pc);setSquareConnect(sc);setEmailQueue(eq.queue||[]);setS3(x=>({...x,endpoint:st.s3Endpoint||'',region:st.s3Region||'us-east-1',bucket:st.s3Bucket||'',accessKeyId:st.s3AccessKeyId||'',forcePathStyle:st.s3ForcePathStyle!==false,secretAccessKey:''}))}).catch(e=>show(e.message,true)),[show]);
+  const [settings,setSettings]=useState(null),[ints,setInts]=useState([]),[paypalConnect,setPaypalConnect]=useState({available:false,status:'not_connected',merchantId:''}),[dropbox,setDropbox]=useState({accessToken:''}),[s3,setS3]=useState({endpoint:'',region:'us-east-1',bucket:'',accessKeyId:'',secretAccessKey:'',forcePathStyle:true}),[emailCfg,setEmailCfg]=useState({service:'resend',apiKey:'',apiToken:'',accountId:'',smtpHost:'',smtpPort:587,smtpSecure:false,smtpUser:'',smtpPassword:'',fromName:'',fromEmail:'',replyTo:'',configured:false,smtpAvailable:false}),[emailQueue,setEmailQueue]=useState([]),[prefs,setPrefs]=useState(null),[testTo,setTestTo]=useState(''),[webhooks,setWebhooks]=useState([]),[storage,setStorage]=useState({provider:'dropbox',r2Bound:false,dropboxConfigured:false,s3Configured:false,localAvailable:false}),[busy,setBusy]=useState('');
+  const load=useCallback(()=>Promise.all([api('admin/settings'),api('admin/integrations'),api('admin/email/config'),api('admin/notification-preferences'),api('admin/webhooks'),api('admin/storage/status'),api('admin/paypal/connect/status'),api('admin/email/queue')]).then(([stg,i,e,n,w,st,pc,eq])=>{setSettings(stg.settings);setInts(i.integrations||[]);setEmailCfg(x=>({...x,...e,apiKey:'',apiToken:'',smtpPassword:''}));setPrefs(n.preferences);setTestTo(e.fromEmail||'');setWebhooks(w.events||[]);setStorage(st);setPaypalConnect(pc);setEmailQueue(eq.queue||[]);setS3(x=>({...x,endpoint:st.s3Endpoint||'',region:st.s3Region||'us-east-1',bucket:st.s3Bucket||'',accessKeyId:st.s3AccessKeyId||'',forcePathStyle:st.s3ForcePathStyle!==false,secretAccessKey:''}))}).catch(e=>show(e.message,true)),[show]);
   useEffect(()=>{load()},[load]); if(!settings||!prefs)return h('div',{className:'empty'},'Loading settings…');
   const artist=settings.artist||{},site=settings.site||{},commerce=settings.commerce||{};const update=(group,key,val)=>setSettings(s=>({...s,[group]:{...(s[group]||{}),[key]:val}}));
   async function save(){try{const d=await api('admin/settings',{method:'PUT',body:JSON.stringify({settings:{artist:settings.artist,site:settings.site,commerce:settings.commerce,socials:settings.socials}})});setSettings(d.settings);show('Settings saved.')}catch(e){show(e.message,true)}}
@@ -977,8 +970,6 @@ function Settings({show,focus}){
   async function testPayPal(){setBusy('paypal-test');try{const d=await api('admin/paypal/test',{method:'POST'});show(`PayPal ${d.environment} credentials authenticated successfully.`)}catch(e){show(e.message,true)}finally{setBusy('')}}
   async function testS3(){setBusy('s3-test');try{await api('admin/storage/s3/test',{method:'POST'});show('S3-compatible storage read/write/delete test passed.')}catch(e){show(e.message,true)}finally{setBusy('')}}
   async function connectPayPal(){setBusy('paypal-connect');try{const d=await api('admin/paypal/connect/start',{method:'POST'});location.href=d.actionUrl}catch(e){show(e.message,true)}finally{setBusy('')}}
-  async function connectSquare(){setBusy('square-connect');try{const d=await api('admin/square/connect/start',{method:'POST'});location.href=d.actionUrl}catch(e){show(e.message,true)}finally{setBusy('')}}
-  async function disconnectSquare(){if(!confirm('Disconnect Square? You can reconnect it later or connect PayPal.'))return;setBusy('square-disconnect');try{await api('admin/square/connect/disconnect',{method:'POST'});show('Square disconnected.');await load()}catch(e){show(e.message,true)}finally{setBusy('')}}
   async function retryEmailQueue(){setBusy('email-retry');try{const d=await api('admin/email/queue/retry',{method:'POST'});show(`Retried ${d.processed||0} queued email(s).`);await load()}catch(e){show(e.message,true)}finally{setBusy('')}}
   async function saveStorage(provider){setBusy('storage');try{const d=await api('admin/storage/config',{method:'PUT',body:JSON.stringify({provider})});setStorage(x=>({...x,provider:d.provider}));show(`${d.provider.toUpperCase()} is now the active media storage provider.`)}catch(e){show(e.message,true)}finally{setBusy('')}}
   const prefToggle=(key,label)=>h('label',{className:'notification-pref'},h('input',{type:'checkbox',checked:!!prefs[key],onChange:e=>setPrefs({...prefs,[key]:e.target.checked})}),h('span',null,label));
@@ -1006,18 +997,6 @@ function Settings({show,focus}){
         paypalConnect.status==='connected'&&h('p',{className:'small muted'},paypalConnect.emailConfirmed?'PayPal email confirmed. Your account is ready to receive payments.':'Finish any remaining PayPal account verification before accepting payments.'),
         !paypalConnect.available&&h('p',{className:'small muted'},'The central PayPal Connect Worker is not configured for this installation. Set ONEARTIST_CONNECT_URL and ONEARTIST_CONNECT_TOKEN as deployment secrets.')
       ),
-      h('section',{className:'card form-card'},
-        h('div',{className:'row between wrap'},h('div',null,h('h3',null,'Square Payments'),h('p',{className:'small muted'},'Connect your Square account. Fans will pay through Square when Square is the active provider. OneArtist Hub does not take a transaction percentage.')),h('span',{className:'pill '+(squareConnect.status==='connected'?'success':'' )},squareConnect.status==='connected'?'CONNECTED':squareConnect.configured?'READY':'NOT CONFIGURED')),
-        squareConnect.merchantId&&h('p',{className:'small muted'},'Square Merchant ID: '+squareConnect.merchantId),
-        h('div',{className:'row wrap'},
-          h(Button,{icon:'link',disabled:busy==='square-connect'||!squareConnect.configured||paypalConnect.status==='connected',onClick:connectSquare},busy==='square-connect'?'Opening Square…':'Connect Square'),
-          squareConnect.status==='connected'&&h(Button,{icon:'unlink',disabled:busy==='square-disconnect',onClick:disconnectSquare},busy==='square-disconnect'?'Disconnecting…':'Disconnect Square')
-        ),
-        paypalConnect.status==='connected'&&h('p',{className:'small muted'},'Square is disabled while PayPal is connected. Disconnect PayPal first to switch payment providers.'),
-        !squareConnect.configured&&h('p',{className:'small muted'},'Square OAuth is not configured on the central Connect Worker yet.')
-      ),
-
-
       h('section',{className:'card form-card'},h('div',{className:'row between wrap'},h('div',null,h('h3',null,'PayPal Payment Events'),h('p',{className:'small muted'},'The central PayPal Connect Worker verifies and routes events here. This site processes only authenticated deliveries.')),h(Button,{className:'compact',icon:'repeat',onClick:load},'Refresh')),webhooks.length?h('div',{className:'webhook-events'},webhooks.slice(0,6).map(w=>h('div',{className:'webhook-row',key:w.event_id},h('span',{className:'webhook-state '+w.status},w.status),h('div',null,h('strong',null,w.event_type),h('div',{className:'small muted'},new Date(w.created_at).toLocaleString(),w.error?' · '+w.error:''))))):h('div',{className:'small muted'},'No payment events received yet.')),
       h('section',{className:'card form-card'},h('div',{className:'row between'},h('h3',null,'S3-Compatible Storage'),storage.s3Configured&&h('span',{className:'pill success'},'Configured')),h('p',{className:'small muted'},'Works with Amazon S3 and S3-compatible providers using AWS Signature V4. Secrets are encrypted in the OneArtist integrations store.'),h('div',{className:'grid2'},h(Field,{label:'Endpoint URL'},h(Input,{value:s3.endpoint,onChange:e=>setS3({...s3,endpoint:e.target.value}),placeholder:'https://s3.us-east-1.amazonaws.com'})),h(Field,{label:'Region'},h(Input,{value:s3.region,onChange:e=>setS3({...s3,region:e.target.value}),placeholder:'us-east-1'})),h(Field,{label:'Bucket'},h(Input,{value:s3.bucket,onChange:e=>setS3({...s3,bucket:e.target.value})})),h(Field,{label:'Access Key ID'},h(Input,{value:s3.accessKeyId,onChange:e=>setS3({...s3,accessKeyId:e.target.value})})),h(Field,{label:'Secret Access Key'},h(Input,{type:'password',value:s3.secretAccessKey,onChange:e=>setS3({...s3,secretAccessKey:e.target.value}),placeholder:storage.s3Configured?'Leave blank to keep current secret':'Encrypted secret'})),h('label',{className:'notification-pref'},h('input',{type:'checkbox',checked:s3.forcePathStyle!==false,onChange:e=>setS3({...s3,forcePathStyle:e.target.checked})}),h('span',null,'Use path-style bucket URL'))),h('div',{className:'row wrap'},h(Button,{icon:'lock',disabled:busy==='s3',onClick:()=>saveInt('s3',s3)},busy==='s3'?'Saving…':'Save S3 Securely'),h(Button,{icon:'check',disabled:busy==='s3-test'||!storage.s3Configured,onClick:testS3},busy==='s3-test'?'Testing…':'Test Read / Write / Delete'))),
       h('section',{className:'card form-card'},h('div',{className:'row between'},h('h3',null,'Dropbox Storage'),ints.some(x=>x.provider==='dropbox')&&h('span',{className:'pill success'},'Configured')),h('p',{className:'small muted'},'Optional alternative to R2. OneArtist stores a protected storage key instead of exposing a permanent Dropbox URL.'),h(Field,{label:'Dropbox access token'},h(Input,{type:'password',value:dropbox.accessToken,onChange:e=>setDropbox({accessToken:e.target.value}),placeholder:'Encrypted in D1'})),h(Button,{icon:'lock',disabled:busy==='dropbox',onClick:()=>saveInt('dropbox',dropbox)},busy==='dropbox'?'Saving…':'Save Dropbox Securely')),
@@ -1134,7 +1113,7 @@ function PublicSite({path,nav}){
   if(!data)return h('div',{className:'auth-page'},h('div',{className:'auth-box card'},h('img',{src:'/art/oneartist-logo.svg',className:'auth-logo'}),h('p',{className:'lead'},'Loading artist website…')),h(Toast,{toast}));
   const s=data.settings||{},content=data.content||[],artist=s.artist||{},site=s.site||{};
   const previewTheme=new URLSearchParams(location.search).get('themePreview');
-  const theme=['midnight','os','neon','cartel'].includes(previewTheme)?previewTheme:(site.publicTheme||'midnight');
+  const theme=['midnight','os','neon','builder'].includes(previewTheme)?previewTheme:(site.publicTheme||'midnight');
   const tracks=content.filter(x=>x.type==='track').sort((a,b)=>(Number(a.data.trackNo)||0)-(Number(b.data.trackNo)||0));
   const allReleases=content.filter(x=>x.type==='release');
   const allVideos=content.filter(x=>x.type==='video');
@@ -1156,7 +1135,7 @@ function PublicSite({path,nav}){
   function playTrackByRelease(rel){playRelease(rel)}
   const brand=site.logoUrl?h('img',{src:site.logoUrl,alt:artist.name||site.title||'Artist',className:'public-artist-logo'}):h('span',{className:'public-artist-brand'},site.title||artist.name||'Artist');
   return h('div',{className:'public '+theme},
-    previewTheme&&h('div',{className:'theme-preview-banner'},h(Icon,{name:'eye'}),` Previewing ${previewTheme==='os'?'Artist OS':previewTheme==='neon'?'Neon Editorial':previewTheme==='cartel'?'Cartel Full Width':'Midnight Cinema'} — activation is controlled from OneArtist Hub Admin.`),
+    previewTheme&&h('div',{className:'theme-preview-banner'},h(Icon,{name:'eye'}),` Previewing ${previewTheme==='os'?'Artist OS':previewTheme==='neon'?'Neon Editorial':previewTheme==='builder'?'Custom Builder':'Midnight Cinema'} — activation is controlled from OneArtist Hub Admin.`),
     h('header',{className:'public-nav'},h('a',{href:'/',className:'public-brand-link',onClick:e=>{e.preventDefault();go('/')}},brand),h('nav',{className:'public-links'},links.map(([to,label])=>h('a',{key:to,href:to,onClick:e=>{e.preventDefault();go(to)}},label))),h(IconButton,{icon:mobileNav?'close':'menu',label:'Toggle navigation',className:'mobile-public-menu',onClick:()=>setMobileNav(v=>!v)})),
     mobileNav&&h('nav',{className:'mobile-public-panel'},links.map(([to,label])=>h('a',{key:to,href:to,onClick:e=>{e.preventDefault();go(to)}},label))),
     custom?h(CustomPage,{page:custom}):route==='/music'?h(ReleaseMusicPage,{releases:allReleases,playRelease}):route==='/videos'?h(VideosPage,{videos:allVideos,openVideo}):route==='/tour'?h(TourPage,{tours:allTours}):route==='/shop'?h(ShopPage,{products:allProducts,addCart}):h(HomePage,{theme,site,artist,releases:homeReleases,videos:homeVideos,tours:homeTours,products:homeProducts,openVideo,addCart,playTrackByRelease}),
@@ -1167,60 +1146,11 @@ function PublicSite({path,nav}){
 
 function HomePage({theme,site,artist,releases,videos,tours,products,openVideo,addCart,playTrackByRelease}){
   const common={site,artist,releases,videos,tours,products,openVideo,addCart,playTrackByRelease};
+  if(theme==='builder')return h(BuilderHome,common);
   if(theme==='os')return h(ArtistOSHome,common);
   if(theme==='neon')return h(NeonEditorialHome,common);
-  if(theme==='cartel')return h(CartelFullWidthHome,common);
-  if(theme==='builder')return h(BuilderHome,common);
   return h(MidnightCinemaHome,common);
 }
-function CartelFullWidthHome({site,artist,releases,tours,products,addCart,playTrackByRelease}){
-  const featured=releases[0];
-  const promo=products[0];
-  const heroImage=site.heroImage||featured?.data.cover||'/art/hero-aurora.svg';
-  const logo=site.logoUrl||'';
-  const title=site.heroTitle||artist.name||site.title||'ARTIST';
-  const subtitle=site.heroSubtitle||featured?.title||'THE LAST ONE LEFT';
-  const artistName=artist.name||site.title||'ARTIST';
-  return h('main',{className:'theme-home cartel-home'},
-    h('section',{className:'ct-hero',style:{backgroundImage:`linear-gradient(90deg,rgba(0,0,0,.88),rgba(0,0,0,.46) 48%,rgba(0,0,0,.12)),linear-gradient(0deg,rgba(0,0,0,.72),transparent 42%),url('${heroImage}')`}},
-      h('div',{className:'ct-hero-inner'},
-        h('div',{className:'ct-kicker'},'NEW ALBUM'),
-        h('h1',null,title),
-        h('div',{className:'ct-subtitle'},subtitle),
-        h('p',null,artist.bio||'The journey, the pain. The grind. The One Left.'),
-        h('p',{className:'ct-stream-copy'},'Stream now on all platforms.'),
-        h('div',{className:'ct-actions'},h(Button,{variant:'primary',icon:'play',onClick:()=>featured&&playTrackByRelease(featured)},'Stream Now'),h(Button,{icon:'play',onClick:()=>featured&&playTrackByRelease(featured)},'Watch Visualizer'))
-      )
-    ),
-    h('section',{className:'ct-section'},
-      h('div',{className:'ct-heading'},h('h2',null,'LATEST RELEASES'),h('a',{href:'/music'},'VIEW ALL')),
-      h(ReleaseSection,{releases,onPlay:playTrackByRelease})
-    ),
-    h('section',{className:'ct-promo',style:{backgroundImage:`linear-gradient(90deg,rgba(0,0,0,.82),rgba(0,0,0,.24)),url('${promo?.data.image||heroImage}')`}},
-      h('div',{className:'ct-promo-copy'},h('span',null,'NEW MERCH DROP'),h('h2',null,promo?.title||'STAY SOLID'),h('p',null,'Exclusive Hoodies, Tees & More'),h('a',{className:'btn primary',href:'/shop'},'SHOP NOW'))
-    ),
-    h('section',{className:'ct-section'},
-      h('div',{className:'ct-heading'},h('h2',null,'OFFICIAL MERCHANDISE'),h('a',{href:'/shop'},'VIEW ALL')),
-      h(ProductSection,{products,onAdd:addCart})
-    ),
-    h('section',{className:'ct-section ct-tour'},
-      h('div',{className:'ct-heading'},h('h2',null,'TOUR DATES'),h('a',{href:'/tour'},'VIEW ALL')),
-      h('div',{className:'ct-tour-list'},tours.length?tours.slice(0,5).map(t=>h('div',{className:'ct-tour-row',key:t.id},
-        h('strong',null,fmtDate(t.sort_date).toUpperCase()),
-        h('strong',null,t.data.city||t.title||''),
-        h('span',null,t.data.venue||''),
-        t.data.ticketUrl&&h('a',{className:'btn primary',href:t.data.ticketUrl,target:'_blank',rel:'noopener'},'GET TICKETS')
-      )):h('div',{className:'empty'},'No upcoming shows.'))
-    ),
-    h('section',{className:'ct-footer-poster',style:{backgroundImage:`linear-gradient(90deg,rgba(0,0,0,.88),rgba(0,0,0,.35)),url('${heroImage}')`}},
-      h('div',null,logo&&h('img',{src:logo,alt:artistName,className:'ct-footer-logo'}),!logo&&h('strong',null,artistName),h('p',null,'Music. Hustle. Legacy.'),h('div',{className:'ct-socials'},['IG','X','YT','TT'].map(x=>h('a',{key:x,href:'#',title:x},x)))),
-      h('div',null,h('span',null,'JOIN THE MOVEMENT'),h('p',null,'Get exclusive updates, music and more.'),h('div',{className:'ct-newsletter'},h('input',{type:'email',placeholder:'Enter your email','aria-label':'Email address'}),h('button',{type:'button',className:'btn primary'},'SUBSCRIBE')))
-    ),
-    h('nav',{className:'ct-footer-nav'},['Home','Music','Merch','Tour','About','Contact','Privacy','Terms'].map((x,i)=>h('a',{key:x,href:['/','/music','/shop','/tour','#about','#contact','#privacy','#terms'][i]},x))),
-    h('div',{className:'ct-copyright'},`© ${new Date().getFullYear()} ${artistName}. All rights reserved.`)
-  );
-}
-
 function BuilderHome({site,artist,releases,videos,tours,products,openVideo,addCart,playTrackByRelease}){
   const blocks=Array.isArray(site.builder)&&site.builder.length?site.builder:defaultBuilder();
   function navTo(url){
