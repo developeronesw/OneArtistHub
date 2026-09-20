@@ -29,6 +29,7 @@ if(!/seriesDays/.test(api)||!/30-Day Engagement/.test(app)){console.error('FAIL 
 
 if(!/const TYPE_META=/.test(app)||!/function blankFor\(/.test(app)||!/function ContentManager\(/.test(app)||!/function ContentEditor\(/.test(app)){console.error('FAIL functional CRUD UI definitions');fail=true}else console.log('PASS functional CRUD UI definitions');
 if(!/function Themes\(/.test(app)||!/publicTheme/.test(app)||!/themePreview/.test(app)){console.error('FAIL immediate theme switching UI');fail=true}else console.log('PASS immediate theme switching UI');
+if(!/function ThemeBuilder\(/.test(app)||!/defaultBuilder/.test(app)||!/function BuilderHome\(/.test(app)||!/\['builder','Theme Builder','palette'\]/.test(app)){console.error('FAIL Theme Builder restore');fail=true}else console.log('PASS Theme Builder restore');
 if(!/admin\/youtube/.test(api)||!/youtubeIdFromUrl/.test(api)||!/Fetch YouTube/.test(app)){console.error('FAIL YouTube CRUD/thumbnail flow');fail=true}else console.log('PASS YouTube CRUD/thumbnail flow');
 if(!/bulkDelete/.test(app)||!/toggleStatus/.test(app)){console.error('FAIL content bulk/status controls');fail=true}else console.log('PASS content bulk/status controls');
 if(!/create\('release'\)/.test(app)||!/create\('video'\)/.test(app)||!/create\('tour'\)/.test(app)){console.error('FAIL dashboard quick-create actions');fail=true}else console.log('PASS dashboard quick-create actions');
