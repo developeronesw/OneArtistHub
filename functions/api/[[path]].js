@@ -340,6 +340,13 @@ async function paypalConnectCall(env,path,payload={},method='POST'){
   if(!r.ok||j.ok===false)throw new Error(cleanText(j.error||`PayPal Connect service returned ${r.status}.`,500));
   return j;
 }
+
+async function squareConnectCall(env,path,payload={},method='POST'){
+  const credential=await connectCredential(env);if(!env.ONEARTIST_CONNECT_URL||!credential?.token)throw new Error('OneArtist Connect service is not configured.');
+  const base=String(env.ONEARTIST_CONNECT_URL).replace(/\/+$/,'');
+  const r=await fetch(`${base}${path}`,{method,headers:{authorization:`Bearer ${credential.token}`,'content-type':'application/json'},body:method==='GET'?undefined:JSON.stringify(payload)});
+  let j={};try{j=await r.json()}catch{} if(!r.ok||j.ok===false)throw new Error(cleanText(j.error||`Square Connect service returned ${r.status}.`,500)); return j;
+}
 async function paypalWorkerConfigured(env){return !!(env.ONEARTIST_CONNECT_URL&&(await connectCredential(env))?.token);}
 
 function paypalCaptureStatus(order){ return cleanText(order?.purchase_units?.[0]?.payments?.captures?.[0]?.status||'',40).toUpperCase(); }
@@ -689,6 +696,29 @@ export async function route(req,env,url,ctx){
   if(p==='admin/storage/s3/test'&&method==='POST'){if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403);const cfg=await s3Config(env);if(!cfg)return json({ok:false,error:'Save S3-compatible credentials first.'},400);const key=`oneartist/system/connection-${id()}.txt`,bytes=utf8('OneArtist Hub S3 connection test');const put=await s3Request(env,'PUT',key,bytes,'text/plain');if(!put.ok)return json({ok:false,error:`S3 write failed (${put.status}).`},502);const get=await s3Request(env,'GET',key);if(!get.ok)return json({ok:false,error:`S3 read failed (${get.status}).`},502);await s3Request(env,'DELETE',key);return json({ok:true,bucket:cfg.bucket,endpoint:cfg.endpoint});}
   if(p==='admin/email/queue'&&method==='GET'){const q=await env.DB.prepare('SELECT id,recipient,template,subject,status,attempts,next_attempt_at,last_error,provider,provider_message_id,created_at,updated_at,sent_at FROM email_queue ORDER BY created_at DESC LIMIT 100').all();return json({ok:true,queue:q.results||[]});}
   if(p==='admin/email/queue/retry'&&method==='POST'){if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403);await env.DB.prepare(`UPDATE email_queue SET status='retry',next_attempt_at=?,updated_at=? WHERE status IN ('retry','dead')`).bind(now(),now()).run();const processed=await processEmailQueue(env,10);return json({ok:true,processed});}
+  if(p==='admin/square/connect/status'&&method==='GET'){
+    const credential=await connectCredential(env); if(!credential?.installationId||!env.ONEARTIST_CONNECT_URL)return json({ok:true,configured:false,status:'not_connected',merchantId:'',locationId:''});
+    try{return json(await squareConnectCall(env,'/square/status',{},'GET'));}catch(e){return json({ok:false,error:cleanText(e.message||e,500)},502);}
+  }
+  if(p==='admin/square/connect/start'&&method==='POST'){
+    if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403);
+    const state=(await getSettings(env)).paypalConnect||{};
+    if(state.status==='connected')return json({ok:false,error:'Disconnect PayPal before connecting Square.'},409);
+    if(!await paypalWorkerConfigured(env))return json({ok:false,error:'Central OneArtist Connect Worker is not configured.'},503);
+    try{
+      const returnUrl=`${url.origin}/api/square/connect/callback`;
+      const j=await squareConnectCall(env,'/square/connect/start',{returnUrl});
+      return json({ok:true,actionUrl:j.actionUrl});
+    }catch(e){return json({ok:false,error:cleanText(e.message||e,500)},502);}
+  }
+  if(p==='square/connect/callback'&&method==='GET'){
+    return Response.redirect(url.origin+'/admin?section=settings&square='+encodeURIComponent(url.searchParams.get('square')||'connected'),302);
+  }
+  if(p==='admin/square/connect/disconnect'&&method==='POST'){
+    if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403);
+    if(!await paypalWorkerConfigured(env))return json({ok:false,error:'Central OneArtist Connect Worker is not configured.'},503);
+    try{await squareConnectCall(env,'/square/disconnect',{});return json({ok:true});}catch(e){return json({ok:false,error:cleanText(e.message||e,500)},502);}
+  }
   if(p==='admin/paypal/connect/start'&&method==='POST'){if(!requireCsrf(req,user))return json({ok:false,error:'CSRF validation failed.'},403);if(!await paypalWorkerConfigured(env))return json({ok:false,error:'PayPal Connect is not enabled on this installation. Configure the server-only OneArtist Connect bootstrap credential.'},503);const tracking=`oah-${id()}`,callback=`${url.origin}/api/paypal/connect/callback`;let j={};try{j=await paypalConnectCall(env,'/onboard/start',{trackingId:tracking,returnUrl:callback})}catch(e){return json({ok:false,error:cleanText(e.message||e,500)},502)}if(!j.actionUrl||!j.trackingId)return json({ok:false,error:'Connect service did not return an onboarding URL.'},502);await setSetting(env,'paypalConnect',{trackingId:j.trackingId,status:'pending'});return json({ok:true,actionUrl:j.actionUrl});}
   if(p==='paypal/connect/callback'&&method==='GET'){const merchantId=cleanText(url.searchParams.get('merchantIdInPayPal')||'',40),granted=url.searchParams.get('permissionsGranted')==='true',paypalTracking=cleanText(url.searchParams.get('merchantId')||'',100),state=(await getSettings(env)).paypalConnect||{};if(!merchantId||!granted||!paypalTracking||!state.trackingId)return new Response('PayPal onboarding could not be verified.',{status:400,headers:{'content-type':'text/plain'}});if(!await paypalWorkerConfigured(env))return new Response('PayPal Connect verification service is unavailable.',{status:503,headers:{'content-type':'text/plain'}});let vj={};try{vj=await paypalConnectCall(env,'/onboard/status',{trackingId:state.trackingId,merchantId})}catch{return new Response('PayPal merchant verification failed.',{status:400,headers:{'content-type':'text/plain'}})}if(vj.trackingId!==paypalTracking||vj.merchantId!==merchantId)return new Response('PayPal merchant verification failed.',{status:400,headers:{'content-type':'text/plain'}});await setSetting(env,'paypalConnect',{trackingId:state.trackingId,merchantId,status:vj.paymentsReceivable?'connected':'action_required',paymentsReceivable:!!vj.paymentsReceivable,connectedAt:now(),accountStatus:cleanText(url.searchParams.get('accountStatus')||'',80),emailConfirmed:!!vj.primaryEmailConfirmed,products:vj.products||[]});return Response.redirect(url.origin+'/admin?section=settings&paypal=connected',302);}
   if(p==='admin/paypal/connect/status'&&method==='GET'){const st=(await getSettings(env)).paypalConnect||{};return json({ok:true,available:await paypalWorkerConfigured(env),status:st.status||'not_connected',merchantId:st.merchantId||'',emailConfirmed:!!st.emailConfirmed});}
