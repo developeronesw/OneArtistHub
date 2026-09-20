@@ -60,3 +60,17 @@ Run `npm test` in this directory. The tests use a KV fixture and mocked `fetch`;
 The Worker uses Partner Referrals with `EXPRESS_CHECKOUT` and `PAYMENT`/`REFUND` permissions. Seller onboarding is performed before payment, which is the PayPal-recommended flow and allows standard PayPal Checkout sellers to use personal accounts when the platform permits casual sellers.
 
 OneArtist Hub does not configure a platform fee. Orders specify the connected seller as the payee and use instant disbursement so funds are routed directly to the seller rather than being collected and later paid out by OneArtist.
+
+
+## Square seller connection
+
+OneArtist Hub now supports Square as the alternate artist payment provider. Square uses OAuth so artists authorize their own Square seller account without entering API credentials into the artist site. A connected installation may have **PayPal or Square, never both**. The Connect Worker rejects a Square connection when PayPal is connected and rejects PayPal onboarding when Square is connected.
+
+Required Connect Worker secrets/variables:
+
+- `SQUARE_ENV`: `production` (use `sandbox` only for testing)
+- `SQUARE_CLIENT_ID`: Square application client ID
+- `SQUARE_CLIENT_SECRET`: Square application secret
+- `SQUARE_REDIRECT_URI`: `https://connect.oneartisthub.site/square/oauth/callback`
+
+The Square OAuth callback must exactly match the URI registered in the Square Developer application. The Worker stores the seller access/refresh tokens encrypted in the existing Connect installation KV and refreshes tokens on a scheduled Worker run. No Square application fee is configured by OneArtist Hub.
