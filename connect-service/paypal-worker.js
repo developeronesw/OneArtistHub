@@ -195,7 +195,6 @@ async function squareSoftwareConfig(env){
   const token=String(env.SOFTWARE_SQUARE_ACCESS_TOKEN||'').trim(),location=clean(env.SOFTWARE_SQUARE_LOCATION_ID,64).trim();
   const applicationId=clean(env.SOFTWARE_SQUARE_APPLICATION_ID||env.SQUARE_CLIENT_ID,191).trim();
   if(!token||!location)throw configurationError('Software Square checkout is not configured on the Worker.');
-  if(!applicationId)throw configurationError('Software Square application ID is not configured on the Worker.');
   const base=env.SQUARE_ENV==='sandbox'?'https://connect.squareupsandbox.com':'https://connect.squareup.com';
   return {token,location,applicationId,base};
 }
@@ -448,7 +447,7 @@ export default {async scheduled(event,env){await squareRefreshAll(env)},async fe
     const url=new URL(req.url),origin=req.headers.get('origin')||WEB_ORIGIN;
     if(req.method==='OPTIONS'&&origin===WEB_ORIGIN)return new Response(null,{status:204,headers:{...corsHeaders(origin),'access-control-max-age':'86400','x-content-type-options':'nosniff'}});
     if(req.method==='GET'&&url.pathname==='/software/products')return secureJson({ok:true,products:await publicProducts(env)},200,origin);
-    if(req.method==='GET'&&url.pathname==='/software/config'){const cfg=await squareSoftwareConfig(env);return secureJson({ok:true,application_id:cfg.applicationId,location_id:cfg.location,environment:env.SQUARE_ENV==='sandbox'?'sandbox':'production'},200,origin);}
+    if(req.method==='GET'&&url.pathname==='/software/config'){const cfg=await squareSoftwareConfig(env);if(!cfg.applicationId)return secureJson({ok:false,error:'Software Square application ID is not configured on the Worker.'},503,origin);return secureJson({ok:true,application_id:cfg.applicationId,location_id:cfg.location,environment:env.SQUARE_ENV==='sandbox'?'sandbox':'production'},200,origin);}
     if(req.method==='POST'&&url.pathname==='/software/webhook')return handleSoftwareWebhook(env,req);
     let requestBody={};
     if((req.method==='POST'||req.method==='PATCH')&&JSON_POST_ROUTES.has(url.pathname)){try{requestBody=await req.json()}catch{return secureJson({ok:false,error:'Invalid JSON request body.'},400,origin)}}
