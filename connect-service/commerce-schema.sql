@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS products (
   price_cents INTEGER NOT NULL CHECK(price_cents >= 0),
   currency TEXT NOT NULL DEFAULT 'USD',
   billing_type TEXT NOT NULL DEFAULT 'one_time' CHECK(billing_type IN ('one_time','yearly')),
+  square_subscription_plan_variation_id TEXT,
   active INTEGER NOT NULL DEFAULT 1,
   updated_at TEXT NOT NULL
 );
@@ -24,6 +25,9 @@ CREATE TABLE IF NOT EXISTS orders (
   square_payment_id TEXT,
   square_order_id TEXT,
   payment_link_id TEXT,
+  square_subscription_id TEXT,
+  square_customer_id TEXT,
+  subscription_status TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -31,6 +35,26 @@ CREATE TABLE IF NOT EXISTS orders (
 CREATE INDEX IF NOT EXISTS idx_orders_email ON orders(customer_email);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(payment_status);
 CREATE INDEX IF NOT EXISTS idx_orders_created ON orders(created_at);
+CREATE INDEX IF NOT EXISTS idx_orders_square_subscription ON orders(square_subscription_id);
+CREATE INDEX IF NOT EXISTS idx_orders_square_customer ON orders(square_customer_id);
+
+CREATE TABLE IF NOT EXISTS subscriptions (
+  square_subscription_id TEXT PRIMARY KEY,
+  order_id TEXT,
+  square_customer_id TEXT,
+  product_id TEXT,
+  plan_variation_id TEXT,
+  status TEXT NOT NULL DEFAULT 'PENDING',
+  start_date TEXT,
+  charged_through_date TEXT,
+  canceled_date TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_subscriptions_order ON subscriptions(order_id);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_customer ON subscriptions(square_customer_id);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_status ON subscriptions(status);
 
 CREATE TABLE IF NOT EXISTS contact_messages (
   id TEXT PRIMARY KEY,
