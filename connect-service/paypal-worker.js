@@ -162,7 +162,7 @@ async function pbkdf2Password(password,salt,iterations){
   return bytesToB64url(new Uint8Array(await crypto.subtle.deriveBits({name:'PBKDF2',salt,iterations,hash:'SHA-256'},key,256)));
 }
 async function verifyAdminPassword(password,stored){
-  const parts=String(stored||'').split(';
+  const parts=String(stored||'').split('$');
   if(parts.length!==4||parts[0]!=='pbkdf2')return false;
   const iterations=Number(parts[1]);if(!Number.isSafeInteger(iterations)||iterations<100000||iterations>1000000)return false;
   try{
