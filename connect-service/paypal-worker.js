@@ -271,8 +271,12 @@ async function handleContact(env,body,req){
 async function adminJson(env,req,data,status=200){const origin=req.headers.get('origin')||WEB_ORIGIN;return secureJson(data,status,origin)}
 async function adminLogin(env,req,body){
   const email=clean(body.email,254).toLowerCase(),password=String(body.password||'');if(!validEmail(email)||password.length<8)return adminJson(env,req,{ok:false,error:'Invalid credentials.'},401);
-  const ip=clean(req.headers.get('cf-connecting-ip')||'unknown',80),rateKey='admin-rate:'+ip;let attempts=0;if(registry(env)){attempts=Number(await registry(env).get(rateKey)||0);if(attempts>=ADMIN_MAX_ATTEMPTS)return adminJson(env,req,{ok:false,error:'Too many attempts. Try again later.'},429);await registry(env).put(rateKey,String(attempts+1),{expirationTtl:ADMIN_RATE_TTL});}
-  if(email!==String(env.ADMIN_EMAIL||'').toLowerCase()||!(await verifyAdminPassword(password,env.ADMIN_PASSWORD_HASH)))return adminJson(env,req,{ok:false,error:'Invalid credentials.'},401);
+  const ip=clean(req.headers.get('cf-connecting-ip')||'unknown',80),rateKey='admin-rate:'+ip;let attempts=0;
+  if(registry(env)){attempts=Number(await registry(env).get(rateKey)||0);if(attempts>=ADMIN_MAX_ATTEMPTS)return adminJson(env,req,{ok:false,error:'Too many attempts. Try again later.'},429);}
+  if(email!==String(env.ADMIN_EMAIL||'').toLowerCase()||!(await verifyAdminPassword(password,env.ADMIN_PASSWORD_HASH))){
+    if(registry(env))await registry(env).put(rateKey,String(attempts+1),{expirationTtl:ADMIN_RATE_TTL});
+    return adminJson(env,req,{ok:false,error:'Invalid credentials.'},401);
+  }
   const token=bytesToB64url(crypto.getRandomValues(new Uint8Array(32))),csrf=bytesToB64url(crypto.getRandomValues(new Uint8Array(32))),hash=await adminHash(token);
   if(!registry(env))throw configurationError('CONNECT_INSTALLATIONS KV binding is not configured.');
   await registry(env).put('admin-session:'+hash,JSON.stringify({email,csrf,expiresAt:Date.now()+ADMIN_SESSION_TTL}),{expirationTtl:ADMIN_SESSION_TTL});
