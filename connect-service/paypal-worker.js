@@ -280,11 +280,11 @@ async function adminLogin(env,req,body){
   const token=bytesToB64url(crypto.getRandomValues(new Uint8Array(32))),csrf=bytesToB64url(crypto.getRandomValues(new Uint8Array(32))),hash=await adminHash(token);
   if(!registry(env))throw configurationError('CONNECT_INSTALLATIONS KV binding is not configured.');
   await registry(env).put('admin-session:'+hash,JSON.stringify({email,csrf,expiresAt:Date.now()+ADMIN_SESSION_TTL}),{expirationTtl:ADMIN_SESSION_TTL});
-  const response=adminJson(env,req,{ok:true,csrf,email});response.headers.set('set-cookie',adminSessionCookie(token));return response;
+  const response=adminJson(env,req,{ok:true,csrf,email});response.headers.append('set-cookie','oah_admin=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict');response.headers.append('set-cookie',adminSessionCookie(token));return response;
 }
 async function adminLogout(env,req){
   const token=cookieValue(req,'oah_admin');if(token&&registry(env))await registry(env).delete('admin-session:'+await adminHash(token));
-  const response=adminJson(env,req,{ok:true});response.headers.set('set-cookie',clearAdminCookie());return response;
+  const response=adminJson(env,req,{ok:true});response.headers.append('set-cookie','oah_admin=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict');response.headers.append('set-cookie',clearAdminCookie());return response;
 }
 async function adminOverview(env,req){
   const db=await d1Required(env),products=await db.prepare('SELECT id,slug,name,version,price_cents,currency,billing_type,active,updated_at FROM products ORDER BY id').all(),orders=await db.prepare('SELECT id,customer_name,customer_email,product_id,product_name,product_version,amount_cents,currency,payment_status,square_payment_id,square_order_id,payment_link_id,created_at,updated_at FROM orders ORDER BY created_at DESC LIMIT 100').all(),stats=await db.prepare("SELECT COUNT(*) AS orders,COALESCE(SUM(CASE WHEN payment_status='paid' THEN amount_cents ELSE 0 END),0) AS revenue_cents,COALESCE(SUM(CASE WHEN product_id='prod_hosted' AND payment_status='paid' THEN 1 ELSE 0 END),0) AS hosted_count,COALESCE(SUM(CASE WHEN payment_status='paid' THEN 1 ELSE 0 END),0) AS paid_count,COALESCE(SUM(CASE WHEN payment_status='pending' THEN 1 ELSE 0 END),0) AS pending_count,COALESCE(SUM(CASE WHEN payment_status='failed' THEN 1 ELSE 0 END),0) AS failed_count FROM orders").first();
