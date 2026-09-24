@@ -167,7 +167,7 @@ async function verifyAdminPassword(password,stored){
     const url=new URL(req.url);
     const origin=req.headers.get('origin')||WEB_ORIGIN;
     let requestBody={};
-    if(req.method==='POST'&&JSON_POST_ROUTES.has(url.pathname)){try{requestBody=await req.json()}catch{return secureJson({ok:false,error:'Invalid JSON request body.'},400,origin)}}
+    if(req.method==='POST'&&url.pathname!=='/software/webhook'&&JSON_POST_ROUTES.has(url.pathname)){try{requestBody=await req.json()}catch{return secureJson({ok:false,error:'Invalid JSON request body.'},400,origin)}}
     if(req.method==='OPTIONS' && origin===WEB_ORIGIN){return new Response(null,{status:204,headers:{...corsHeaders(origin),'access-control-max-age':'86400','x-content-type-options':'nosniff'}})}
     if(url.pathname==='/software/products'&&req.method==='GET')return secureJson({ok:true,products:await publicProducts(env)},200,origin);
     if(url.pathname==='/software/checkout'&&req.method==='POST')return handleSoftwareCheckout(env,requestBody);
@@ -193,8 +193,6 @@ async function verifyAdminPassword(password,stored){
     if(url.pathname==='/admin/overview'&&req.method==='GET')return adminJson(env,req,{ok:false,error:'Unauthorized'},401);
     if(url.pathname==='/health')return json({ok:true,service:'OneArtist Connect',paypalEnvironment:env.PAYPAL_ENV==='live'?'live':'sandbox',squareEnvironment:env.SQUARE_ENV==='sandbox'?'sandbox':'production',squareConfigured:!!(env.SQUARE_CLIENT_ID&&env.SQUARE_CLIENT_SECRET)});
     if(req.method==='POST'&&url.pathname==='/paypal/webhook')return receiveWebhook(req,env);
-    let requestBody={};
-    if(req.method==='POST'&&JSON_POST_ROUTES.has(url.pathname)){try{requestBody=await req.json()}catch{return json({ok:false,error:'Invalid JSON request body.'},400)}}
     if(req.method==='POST'&&url.pathname==='/installations/register'){
       const id=clean(requestBody.installationId,64),route=validRoute(clean(requestBody.url,1000));
       if(!validInstallationId(id)||!route)return json({ok:false,error:'A valid installationId and HTTPS callback URL are required.'},400);
