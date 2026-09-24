@@ -226,17 +226,37 @@ async function createOrderEmail(env,order){
 async function publicProducts(env){
   const db=await d1Required(env);const result=await db.prepare('SELECT id,slug,name,version,price_cents AS price,currency,billing_type,active FROM products WHERE active=1 ORDER BY id').all();return result.results||[];
 }
+async function attachSubscriptionToOrder(db,subscription){
+  const subscriptionId=clean(subscription.id,192),customerId=clean(subscription.customer_id,192),variationId=clean(subscription.plan_variation_id,192);
+  if(!subscriptionId)return null;
+  let order=null;
+  if(customerId)order=await db.prepare("SELECT * FROM orders WHERE product_id='prod_hosted' AND square_customer_id=? ORDER BY created_at DESC LIMIT 1").bind(customerId).first();
+  if(!order&&variationId)order=await db.prepare("SELECT o.* FROM orders o JOIN products p ON p.id=o.product_id WHERE o.product_id='prod_hosted' AND p.square_subscription_plan_variation_id=? AND o.square_subscription_id IS NULL ORDER BY o.created_at DESC LIMIT 1").bind(variationId).first();
+  if(order){
+    await db.prepare('UPDATE orders SET square_subscription_id=?,square_customer_id=COALESCE(?,square_customer_id),subscription_status=?,updated_at=? WHERE id=?').bind(subscriptionId,customerId||null,clean(subscription.status,40).toUpperCase()||'PENDING',new Date().toISOString(),order.id).run();
+  }
+  return order;
+}
 async function handleSoftwareCheckout(env,body,req){
   if(await publicRateLimited(env,req,'checkout',10,3600))return secureJson({ok:false,error:'Too many checkout attempts. Please try again later.'},429);
   const db=await d1Required(env),slug=clean(body.product,64),name=clean(body.customer_name,120),email=clean(body.customer_email,254).toLowerCase();
   if(!['self-hosted','hosted'].includes(slug)||!name||!validEmail(email))return secureJson({ok:false,error:'Valid product, name and email are required.'},400);
   const product=await db.prepare('SELECT * FROM products WHERE slug=? AND active=1').bind(slug).first();if(!product)return secureJson({ok:false,error:'Product is unavailable.'},404);
+  if(product.billing_type==='yearly'&&!clean(product.square_subscription_plan_variation_id,192))return secureJson({ok:false,error:'Hosted subscription is not configured yet. Please contact support.'},503);
   const orderId='OAH-'+crypto.randomUUID().replace(/-/g,'').slice(0,20).toUpperCase(),now=new Date().toISOString();
   await db.prepare('INSERT INTO orders(id,customer_name,customer_email,product_id,product_name,product_version,amount_cents,currency,payment_status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)').bind(orderId,name,email,product.id,product.name,product.version,product.price_cents,product.currency,'pending',now,now).run();
   try{
-    const data=await squareSoftwareRequest(env,'/online-checkout/payment-links',{idempotency_key:crypto.randomUUID(),quick_pay:{name:product.name,price_money:{amount:product.price_cents,currency:product.currency},location_id:(await squareSoftwareConfig(env)).location},pre_populated_data:{buyer_email:email},payment_note:orderId});
+    const cfg=await squareSoftwareConfig(env);
+    const checkout={
+      idempotency_key:crypto.randomUUID(),
+      quick_pay:{name:product.name,price_money:{amount:product.price_cents,currency:product.currency},location_id:cfg.location},
+      pre_populated_data:{buyer_email:email},
+      payment_note:orderId
+    };
+    if(product.billing_type==='yearly')checkout.checkout_options={subscription_plan_id:clean(product.square_subscription_plan_variation_id,192)};
+    const data=await squareSoftwareRequest(env,'/online-checkout/payment-links',checkout);
     const link=data.payment_link||{},squareOrder=data.related_resources?.orders?.[0]||{};
-    await db.prepare('UPDATE orders SET square_order_id=?,payment_link_id=?,updated_at=? WHERE id=?').bind(squareOrder.id||'',link.id||'',now,orderId).run();
+    await db.prepare('UPDATE orders SET square_order_id=?,payment_link_id=?,updated_at=? WHERE id=?').bind(squareOrder.id||'',link.id||'',new Date().toISOString(),orderId).run();
     return secureJson({ok:true,checkout_url:link.url||link.long_url||'',order_id:orderId},201);
   }catch(error){
     await db.prepare("UPDATE orders SET payment_status='failed',updated_at=? WHERE id=?").bind(new Date().toISOString(),orderId).run();
@@ -247,13 +267,41 @@ async function handleSoftwareWebhook(env,req){
   const raw=await req.text();if(!(await verifySquareSoftwareWebhook(env,raw,req.headers.get('x-square-hmacsha256-signature'))))return secureJson({ok:false,error:'Invalid Square webhook signature.'},403);
   let event;try{event=JSON.parse(raw)}catch{return secureJson({ok:false,error:'Invalid webhook JSON.'},400)}
   const eventId=clean(event.event_id,192);if(eventId&&registry(env)){const key='square-event:'+await adminHash(eventId);if(await registry(env).get(key))return secureJson({ok:true,duplicate:true});await registry(env).put(key,'1',{expirationTtl:604800});}
+  const db=await d1Required(env),now=new Date().toISOString();
   if(['payment.created','payment.updated'].includes(event.type)){
-    const payment=event.data?.object?.payment||{},orderId=clean(payment.order_id,192),status=clean(payment.status,40).toUpperCase();
-    const db=await d1Required(env);const order=orderId?await db.prepare('SELECT * FROM orders WHERE square_order_id=?').bind(orderId).first():null;
+    const payment=event.data?.object?.payment||{},orderId=clean(payment.order_id,192),status=clean(payment.status,40).toUpperCase(),customerId=clean(payment.customer_id,192);
+    const order=orderId?await db.prepare('SELECT * FROM orders WHERE square_order_id=?').bind(orderId).first():null;
     if(order){
       const mapped=status==='COMPLETED'?'paid':status==='FAILED'?'failed':status==='CANCELED'?'canceled':'pending';
-      await db.prepare('UPDATE orders SET payment_status=?,square_payment_id=?,updated_at=? WHERE id=?').bind(mapped,clean(payment.id,192),new Date().toISOString(),order.id).run();
-      if(mapped==='paid'){try{await createOrderEmail(env,{...order,payment_status:mapped})}catch{}}
+      await db.prepare('UPDATE orders SET payment_status=?,square_payment_id=?,square_customer_id=COALESCE(?,square_customer_id),updated_at=? WHERE id=?').bind(mapped,clean(payment.id,192),customerId||null,now,order.id).run();
+      if(order.product_id==='prod_hosted'&&customerId){
+        const sub=await db.prepare('SELECT * FROM subscriptions WHERE square_customer_id=? ORDER BY updated_at DESC LIMIT 1').bind(customerId).first();
+        if(sub&&!order.square_subscription_id)await db.prepare('UPDATE orders SET square_subscription_id=?,subscription_status=?,updated_at=? WHERE id=?').bind(sub.square_subscription_id,sub.status,now,order.id).run();
+      }
+      if(mapped==='paid'&&order.payment_status!=='paid'){try{await createOrderEmail(env,{...order,payment_status:mapped})}catch{}}
+    }
+  }else if(['subscription.created','subscription.updated'].includes(event.type)){
+    const sub=event.data?.object?.subscription||{},subscriptionId=clean(sub.id||event.data?.id,192),customerId=clean(sub.customer_id,192),variationId=clean(sub.plan_variation_id,192),status=clean(sub.status,40).toUpperCase()||'PENDING';
+    if(subscriptionId){
+      const existing=await db.prepare('SELECT * FROM subscriptions WHERE square_subscription_id=?').bind(subscriptionId).first();
+      await db.prepare("INSERT INTO subscriptions(square_subscription_id,order_id,square_customer_id,product_id,plan_variation_id,status,start_date,charged_through_date,canceled_date,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(square_subscription_id) DO UPDATE SET order_id=COALESCE(excluded.order_id,subscriptions.order_id),square_customer_id=COALESCE(excluded.square_customer_id,subscriptions.square_customer_id),product_id=COALESCE(excluded.product_id,subscriptions.product_id),plan_variation_id=COALESCE(excluded.plan_variation_id,subscriptions.plan_variation_id),status=excluded.status,start_date=COALESCE(excluded.start_date,subscriptions.start_date),charged_through_date=COALESCE(excluded.charged_through_date,subscriptions.charged_through_date),canceled_date=COALESCE(excluded.canceled_date,subscriptions.canceled_date),updated_at=excluded.updated_at")
+        .bind(subscriptionId,existing?.order_id||null,customerId||existing?.square_customer_id||null,existing?.product_id||'prod_hosted',variationId||existing?.plan_variation_id||null,status,clean(sub.start_date,40)||existing?.start_date||null,clean(sub.charged_through_date,40)||existing?.charged_through_date||null,clean(sub.canceled_date,40)||existing?.canceled_date||null,existing?.created_at||now,now).run();
+      const linkedOrder=await attachSubscriptionToOrder(db,sub);
+      if(linkedOrder)await db.prepare('UPDATE subscriptions SET order_id=? WHERE square_subscription_id=?').bind(linkedOrder.id,subscriptionId).run();
+      const linked=await db.prepare('SELECT order_id FROM subscriptions WHERE square_subscription_id=?').bind(subscriptionId).first();
+      if(linked?.order_id)await db.prepare('UPDATE orders SET subscription_status=?,updated_at=? WHERE id=?').bind(status,now,linked.order_id).run();
+    }
+  }else if(event.type==='invoice.payment_made'){
+    const invoice=event.data?.object?.invoice||{},subscriptionId=clean(invoice.subscription_id,192);
+    if(subscriptionId){
+      const order=await db.prepare('SELECT * FROM orders WHERE square_subscription_id=?').bind(subscriptionId).first();
+      if(order)await db.prepare("UPDATE orders SET payment_status='paid',updated_at=? WHERE id=?").bind(now,order.id).run();
+    }
+  }else if(event.type==='invoice.scheduled_charge_failed'){
+    const invoice=event.data?.object?.invoice||{},subscriptionId=clean(invoice.subscription_id,192);
+    if(subscriptionId){
+      const order=await db.prepare('SELECT * FROM orders WHERE square_subscription_id=?').bind(subscriptionId).first();
+      if(order)await db.prepare("UPDATE orders SET payment_status='failed',updated_at=? WHERE id=?").bind(now,order.id).run();
     }
   }
   return secureJson({ok:true});
