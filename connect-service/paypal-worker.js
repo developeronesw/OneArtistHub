@@ -293,11 +293,35 @@ async function adminEmailUpdate(env,req,body){
 
 export default {async scheduled(event,env){await squareRefreshAll(env)},async fetch(req,env){
   try{
-    const url=new URL(req.url);
+    const url=new URL(req.url),origin=req.headers.get('origin')||WEB_ORIGIN;
+    if(req.method==='OPTIONS'&&origin===WEB_ORIGIN)return new Response(null,{status:204,headers:{...corsHeaders(origin),'access-control-max-age':'86400','x-content-type-options':'nosniff'}});
+    if(req.method==='GET'&&url.pathname==='/software/products')return secureJson({ok:true,products:await publicProducts(env)},200,origin);
+    if(req.method==='POST'&&url.pathname==='/software/webhook')return handleSoftwareWebhook(env,req);
+    let requestBody={};
+    if((req.method==='POST'||req.method==='PATCH')&&JSON_POST_ROUTES.has(url.pathname)){try{requestBody=await req.json()}catch{return secureJson({ok:false,error:'Invalid JSON request body.'},400,origin)}}
+    if(req.method==='POST'&&url.pathname==='/software/checkout')return handleSoftwareCheckout(env,requestBody);
+    if(req.method==='POST'&&url.pathname==='/software/contact')return handleContact(env,requestBody);
+    if(req.method==='POST'&&url.pathname==='/admin/login')return adminLogin(env,req,requestBody);
+    if(req.method==='POST'&&url.pathname==='/admin/logout')return adminLogout(env,req);
+    if(req.method==='GET'&&url.pathname==='/admin/me'){const session=await adminSession(env,req);return adminJson(env,req,session?{ok:true,email:session.email,csrf:session.csrf}:{ok:false},session?200:401)}
+    if(req.method==='GET'&&url.pathname==='/admin/overview'){if(!await requireAdmin(env,req))return adminJson(env,req,{ok:false,error:'Unauthorized'},401);return adminOverview(env,req)}
+    if(req.method==='PATCH'&&url.pathname==='/admin/products'){if(!await requireAdmin(env,req))return adminJson(env,req,{ok:false,error:'Unauthorized'},401);return adminProductUpdate(env,req,requestBody)}
+    if(req.method==='POST'&&url.pathname==='/admin/settings/email'){if(!await requireAdmin(env,req))return adminJson(env,req,{ok:false,error:'Unauthorized'},401);return adminEmailUpdate(env,req,requestBody)}
+    if(req.method==='POST'&&url.pathname==='/admin/email/test'){
+      if(!await requireAdmin(env,req))return adminJson(env,req,{ok:false,error:'Unauthorized'},401);
+      const to=await setting(env,'contact_to','');if(!to)return adminJson(env,req,{ok:false,error:'Set a contact email first.'},400);
+      const from=await setting(env,'email_from','contact@oneartisthub.site');
+      await sendEmail(env,{to,from,subject:'OneArtistHub Email Service test',text:'Your Cloudflare Email Service binding is working.',html:'<h2>OneArtistHub Email Service is working.</h2><p>This message was sent by the OneArtistHub Connect Worker.</p>'});
+      return adminJson(env,req,{ok:true});
+    }
+    if(req.method==='GET'&&url.pathname==='/admin/square/status'){
+      if(!await requireAdmin(env,req))return adminJson(env,req,{ok:false,error:'Unauthorized'},401);
+      let connected=false;
+      if(env.SOFTWARE_SQUARE_ACCESS_TOKEN&&env.SOFTWARE_SQUARE_LOCATION_ID){try{const cfg=await squareSoftwareConfig(env);const check=await fetch(cfg.base+'/v2/locations/'+encodeURIComponent(cfg.location),{headers:{authorization:'Bearer '+cfg.token,'Square-Version':'2026-09-16'}});connected=check.ok}catch{}}
+      return adminJson(env,req,{ok:true,configured:!!env.SOFTWARE_SQUARE_ACCESS_TOKEN,locationConfigured:!!env.SOFTWARE_SQUARE_LOCATION_ID,connected,environment:env.SQUARE_ENV==='sandbox'?'sandbox':'production',webhookConfigured:!!env.SOFTWARE_SQUARE_WEBHOOK_SIGNATURE_KEY});
+    }
     if(url.pathname==='/health')return json({ok:true,service:'OneArtist Connect',paypalEnvironment:env.PAYPAL_ENV==='live'?'live':'sandbox',squareEnvironment:env.SQUARE_ENV==='sandbox'?'sandbox':'production',squareConfigured:!!(env.SQUARE_CLIENT_ID&&env.SQUARE_CLIENT_SECRET)});
     if(req.method==='POST'&&url.pathname==='/paypal/webhook')return receiveWebhook(req,env);
-    let requestBody={};
-    if(req.method==='POST'&&JSON_POST_ROUTES.has(url.pathname)){try{requestBody=await req.json()}catch{return json({ok:false,error:'Invalid JSON request body.'},400)}}
     if(req.method==='POST'&&url.pathname==='/installations/register'){
       const id=clean(requestBody.installationId,64),route=validRoute(clean(requestBody.url,1000));
       if(!validInstallationId(id)||!route)return json({ok:false,error:'A valid installationId and HTTPS callback URL are required.'},400);
