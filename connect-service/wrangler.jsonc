@@ -10,11 +10,23 @@
       "id": "3a775fdfa9f646d4a4a0da9d1727286c"
     }
   ],
-  "triggers": { "crons": ["0 */6 * * *"] },
+  "triggers": {
+    "crons": [
+      "0 */6 * * *"
+    ]
+  },
   "routes": [
     {
       "pattern": "connect.oneartisthub.site",
       "custom_domain": true
+    }
+  ],
+  "send_email": [
+    {
+      "name": "EMAIL",
+      "allowed_sender_addresses": [
+        "contact@oneartisthub.site"
+      ]
     }
   ]
 }
