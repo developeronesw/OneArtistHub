@@ -152,9 +152,9 @@ function secureJson(data,status=200,origin=WEB_ORIGIN){
 }
 function validEmail(value){return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value||''))&&String(value).length<=254}
 function adminSessionCookie(token){
-  return 'oah_admin='+encodeURIComponent(token)+'; Path=/; Max-Age='+ADMIN_SESSION_TTL+'; HttpOnly; Secure; SameSite=Strict';
+  return 'oah_admin='+encodeURIComponent(token)+'; Domain=.oneartisthub.site; Path=/; Max-Age='+ADMIN_SESSION_TTL+'; HttpOnly; Secure; SameSite=Strict';
 }
-function clearAdminCookie(){return 'oah_admin=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict'}
+function clearAdminCookie(){return 'oah_admin=; Domain=.oneartisthub.site; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict'}
 function cookieValue(req,name){const raw=req.headers.get('cookie')||'';for(const part of raw.split(';')){const [k,...v]=part.trim().split('=');if(k===name)return decodeURIComponent(v.join('='));}return ''}
 async function adminHash(value){return bytesToB64url(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(String(value)))))}
 async function pbkdf2Password(password,salt,iterations){
