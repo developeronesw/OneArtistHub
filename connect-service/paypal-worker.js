@@ -167,7 +167,7 @@ async function verifyAdminPassword(password,stored){
     const url=new URL(req.url);
     const origin=req.headers.get('origin')||WEB_ORIGIN;
     let requestBody={};
-    if(req.method==='POST'&&url.pathname!=='/software/webhook'&&JSON_POST_ROUTES.has(url.pathname)){try{requestBody=await req.json()}catch{return secureJson({ok:false,error:'Invalid JSON request body.'},400,origin)}}
+    if((req.method==='POST'||req.method==='PATCH')&&url.pathname!=='/software/webhook'&&JSON_POST_ROUTES.has(url.pathname)){try{requestBody=await req.json()}catch{return secureJson({ok:false,error:'Invalid JSON request body.'},400,origin)}}
     if(req.method==='OPTIONS' && origin===WEB_ORIGIN){return new Response(null,{status:204,headers:{...corsHeaders(origin),'access-control-max-age':'86400','x-content-type-options':'nosniff'}})}
     if(url.pathname==='/software/products'&&req.method==='GET')return secureJson({ok:true,products:await publicProducts(env)},200,origin);
     if(url.pathname==='/software/checkout'&&req.method==='POST')return handleSoftwareCheckout(env,requestBody);
