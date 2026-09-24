@@ -181,6 +181,11 @@ async function requireAdmin(env,req){
   }
   return session;
 }
+async function publicRateLimited(env,req,prefix,max,ttl){
+  const kv=registry(env);if(!kv)return false;
+  const ip=clean(req.headers.get('cf-connecting-ip')||'unknown',80),key=prefix+':'+await adminHash(ip);
+  const count=Number(await kv.get(key)||0);if(count>=max)return true;await kv.put(key,String(count+1),{expirationTtl:ttl});return false;
+}
 async function d1Required(env){const db=COMMERCE_DB(env);if(!db)throw configurationError('Commerce D1 database binding COMMERCE_DB is not configured.');return db}
 async function setting(env,key,fallback=''){
   const db=await d1Required(env);const row=await db.prepare('SELECT value FROM settings WHERE key=?').bind(key).first();return row?.value??fallback;
@@ -221,7 +226,8 @@ async function createOrderEmail(env,order){
 async function publicProducts(env){
   const db=await d1Required(env);const result=await db.prepare('SELECT id,slug,name,version,price_cents AS price,currency,billing_type,active FROM products WHERE active=1 ORDER BY id').all();return result.results||[];
 }
-async function handleSoftwareCheckout(env,body){
+async function handleSoftwareCheckout(env,body,req){
+  if(await publicRateLimited(env,req,'checkout',10,3600))return secureJson({ok:false,error:'Too many checkout attempts. Please try again later.'},429);
   const db=await d1Required(env),slug=clean(body.product,64),name=clean(body.customer_name,120),email=clean(body.customer_email,254).toLowerCase();
   if(!['self-hosted','hosted'].includes(slug)||!name||!validEmail(email))return secureJson({ok:false,error:'Valid product, name and email are required.'},400);
   const product=await db.prepare('SELECT * FROM products WHERE slug=? AND active=1').bind(slug).first();if(!product)return secureJson({ok:false,error:'Product is unavailable.'},404);
@@ -252,7 +258,8 @@ async function handleSoftwareWebhook(env,req){
   }
   return secureJson({ok:true});
 }
-async function handleContact(env,body){
+async function handleContact(env,body,req){
+  if(await publicRateLimited(env,req,'contact',5,3600))return secureJson({ok:false,error:'Too many contact attempts. Please try again later.'},429);
   const db=await d1Required(env),name=clean(body.name,120),email=clean(body.email,254).toLowerCase(),message=clean(body.message,5000);
   if(!name||!validEmail(email)||!message)return secureJson({ok:false,error:'Name, valid email and message are required.'},400);
   const id='MSG-'+crypto.randomUUID().replace(/-/g,'').slice(0,20).toUpperCase(),now=new Date().toISOString();
@@ -299,8 +306,8 @@ export default {async scheduled(event,env){await squareRefreshAll(env)},async fe
     if(req.method==='POST'&&url.pathname==='/software/webhook')return handleSoftwareWebhook(env,req);
     let requestBody={};
     if((req.method==='POST'||req.method==='PATCH')&&JSON_POST_ROUTES.has(url.pathname)){try{requestBody=await req.json()}catch{return secureJson({ok:false,error:'Invalid JSON request body.'},400,origin)}}
-    if(req.method==='POST'&&url.pathname==='/software/checkout')return handleSoftwareCheckout(env,requestBody);
-    if(req.method==='POST'&&url.pathname==='/software/contact')return handleContact(env,requestBody);
+    if(req.method==='POST'&&url.pathname==='/software/checkout')return handleSoftwareCheckout(env,requestBody,req);
+    if(req.method==='POST'&&url.pathname==='/software/contact')return handleContact(env,requestBody,req);
     if(req.method==='POST'&&url.pathname==='/admin/login')return adminLogin(env,req,requestBody);
     if(req.method==='POST'&&url.pathname==='/admin/logout')return adminLogout(env,req);
     if(req.method==='GET'&&url.pathname==='/admin/me'){const session=await adminSession(env,req);return adminJson(env,req,session?{ok:true,email:session.email,csrf:session.csrf}:{ok:false},session?200:401)}
