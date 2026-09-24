@@ -41,7 +41,7 @@ async function register(store,installationId,url='https://artist.example',token=
 test('health endpoint stays public and reports the configured environment',{concurrency:false},async()=>{
   const result=await responseJson(await worker.fetch(request('/health'),environment()));
   assert.equal(result.status,200);
-  assert.deepEqual(result.body,{ok:true,service:'OneArtist Connect',paypalEnvironment:'sandbox'});
+  assert.deepEqual(result.body,{ok:true,service:'OneArtist Connect',paypalEnvironment:'sandbox',squareEnvironment:'production',squareConfigured:false});
 });
 
 test('rejects caller-supplied platform fees before making a PayPal request',{concurrency:false},async()=>{
