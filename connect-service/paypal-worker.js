@@ -1,6 +1,6 @@
 function json(data,status=200){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store'}})}
 const clean=(v,n=500)=>String(v??'').replace(/\0/g,'').slice(0,n)
-const JSON_POST_ROUTES=new Set(['/installations/activate','/installations/register','/installations/revoke','/onboard/start','/onboard/status','/paypal/create-order','/paypal/order','/paypal/capture','/paypal/refund','/paypal/webhook/verify','/square/connect/start','/square/disconnect','/square/checkout','/square/order','/software/checkout','/software/contact','/software/webhook','/admin/login','/admin/logout','/admin/products','/admin/settings/email','/admin/email/test'])
+const JSON_POST_ROUTES=new Set(['/installations/activate','/installations/register','/installations/revoke','/onboard/start','/onboard/status','/paypal/create-order','/paypal/order','/paypal/capture','/paypal/refund','/paypal/webhook/verify','/square/connect/start','/square/disconnect','/square/checkout','/square/order','/software/checkout','/software/payment','/software/contact','/software/webhook','/admin/login','/admin/logout','/admin/products','/admin/settings/email','/admin/email/test'])
 function base64url(value){return btoa(typeof value==='string'?value:JSON.stringify(value)).replace(/=+$/,'').replace(/\+/g,'-').replace(/\//g,'_')}
 function authAssertion(clientId,merchantId){return `${base64url({alg:'none'})}.${base64url({iss:clientId,payer_id:merchantId})}.`}
 function configurationError(message){const error=new Error(message);error.status=503;return error}
@@ -193,13 +193,17 @@ async function setting(env,key,fallback=''){
 async function saveSetting(env,key,value){const db=await d1Required(env);await db.prepare("INSERT INTO settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(key,String(value),new Date().toISOString()).run()}
 async function squareSoftwareConfig(env){
   const token=String(env.SOFTWARE_SQUARE_ACCESS_TOKEN||'').trim(),location=clean(env.SOFTWARE_SQUARE_LOCATION_ID,64).trim();
+  const applicationId=clean(env.SOFTWARE_SQUARE_APPLICATION_ID||env.SQUARE_CLIENT_ID,191).trim();
   if(!token||!location)throw configurationError('Software Square checkout is not configured on the Worker.');
+  if(!applicationId)throw configurationError('Software Square application ID is not configured on the Worker.');
   const base=env.SQUARE_ENV==='sandbox'?'https://connect.squareupsandbox.com':'https://connect.squareup.com';
-  return {token,location,base};
+  return {token,location,applicationId,base};
 }
-async function squareSoftwareRequest(env,path,body){
+async function squareSoftwareRequest(env,path,body,method='POST'){
   const cfg=await squareSoftwareConfig(env);
-  const r=await fetch(cfg.base+'/v2'+path,{method:'POST',headers:{authorization:'Bearer '+cfg.token,'content-type':'application/json','Square-Version':'2026-09-16'},body:JSON.stringify(body)});
+  const options={method,headers:{authorization:'Bearer '+cfg.token,'content-type':'application/json','Square-Version':'2026-09-16'}};
+  if(body!==undefined)options.body=JSON.stringify(body);
+  const r=await fetch(cfg.base+'/v2'+path,options);
   let data={};try{data=await r.json()}catch{}if(!r.ok)throw Object.assign(new Error(clean(data?.errors?.[0]?.detail||data?.errors?.[0]?.code||'Square request failed.',500)),{status:r.status});
   return data;
 }
@@ -237,6 +241,88 @@ async function attachSubscriptionToOrder(db,subscription){
   }
   return order;
 }
+async function handleSoftwarePayment(env,body,req){
+  if(await publicRateLimited(env,req,'payment',10,3600))return secureJson({ok:false,error:'Too many payment attempts. Please try again later.'},429);
+  const db=await d1Required(env),slug=clean(body.product,64),name=clean(body.customer_name,120),email=clean(body.customer_email,254).toLowerCase(),sourceId=clean(body.source_id,16384),verificationToken=clean(body.verification_token,8192);
+  if(!['self-hosted','hosted'].includes(slug)||!name||!validEmail(email)||!sourceId)return secureJson({ok:false,error:'Valid product, name, email and payment source are required.'},400);
+  const product=await db.prepare('SELECT * FROM products WHERE slug=? AND active=1').bind(slug).first();
+  if(!product)return secureJson({ok:false,error:'Product is unavailable.'},404);
+  if(product.billing_type==='yearly'&&!clean(product.square_subscription_plan_variation_id,192))return secureJson({ok:false,error:'Hosted subscription is not configured yet. Please contact support.'},503);
+  const orderId='OAH-'+crypto.randomUUID().replace(/-/g,'').slice(0,20).toUpperCase(),now=new Date().toISOString();
+  await db.prepare('INSERT INTO orders(id,customer_name,customer_email,product_id,product_name,product_version,amount_cents,currency,payment_status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)').bind(orderId,name,email,product.id,product.name,product.version,product.price_cents,product.currency,'pending',now,now).run();
+  try{
+    const cfg=await squareSoftwareConfig(env);
+    if(product.billing_type==='yearly'){
+      const customerData=await squareSoftwareRequest(env,'/customers',{
+        idempotency_key:crypto.randomUUID(),
+        given_name:name,
+        email_address:email,
+        reference_id:orderId
+      });
+      const customer=customerData.customer;
+      if(!customer?.id)throw Object.assign(new Error('Square customer profile could not be created.'),{status:502});
+      await db.prepare('UPDATE orders SET square_customer_id=?,updated_at=? WHERE id=?').bind(customer.id,new Date().toISOString(),orderId).run();
+      const cardData=await squareSoftwareRequest(env,'/cards',{
+        idempotency_key:crypto.randomUUID(),
+        source_id:sourceId,
+        verification_token:verificationToken||undefined,
+        card:{customer_id:customer.id,reference_id:orderId}
+      });
+      const card=cardData.card;
+      if(!card?.id)throw Object.assign(new Error('Square could not securely store the payment method.'),{status:502});
+      const subscriptionData=await squareSoftwareRequest(env,'/subscriptions',{
+        idempotency_key:crypto.randomUUID(),
+        location_id:cfg.location,
+        plan_variation_id:clean(product.square_subscription_plan_variation_id,192),
+        customer_id:customer.id,
+        card_id:card.id,
+        source:{name:'OneArtistHub'}
+      });
+      const subscription=subscriptionData.subscription;
+      if(!subscription?.id)throw Object.assign(new Error('Square did not create the hosted subscription.'),{status:502});
+      await db.prepare('UPDATE orders SET square_subscription_id=?,square_customer_id=?,subscription_status=?,updated_at=? WHERE id=?').bind(subscription.id,customer.id,clean(subscription.status,40).toUpperCase()||'PENDING',new Date().toISOString(),orderId).run();
+      await db.prepare("INSERT INTO subscriptions(square_subscription_id,order_id,square_customer_id,product_id,plan_variation_id,status,start_date,charged_through_date,canceled_date,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(square_subscription_id) DO UPDATE SET order_id=excluded.order_id,square_customer_id=excluded.square_customer_id,product_id=excluded.product_id,plan_variation_id=excluded.plan_variation_id,status=excluded.status,start_date=excluded.start_date,charged_through_date=excluded.charged_through_date,canceled_date=excluded.canceled_date,updated_at=excluded.updated_at")
+        .bind(subscription.id,orderId,customer.id,product.id,clean(subscription.plan_variation_id,192),clean(subscription.status,40).toUpperCase()||'PENDING',clean(subscription.start_date,40)||null,clean(subscription.charged_through_date,40)||null,clean(subscription.canceled_date,40)||null,now,new Date().toISOString()).run();
+      if(String(subscription.status||'').toUpperCase()==='ACTIVE'){
+        await db.prepare("UPDATE orders SET payment_status='paid',updated_at=? WHERE id=?").bind(new Date().toISOString(),orderId).run();
+        try{await createOrderEmail(env,{id:orderId,product_id:product.id,customer_email:email,payment_status:'paid'})}catch{}
+      }
+      return secureJson({ok:true,order_id:orderId,payment_status:String(subscription.status||'PENDING').toLowerCase()==='active'?'paid':'pending',subscription_status:String(subscription.status||'PENDING').toLowerCase(),subscription_id:subscription.id},201);
+    }
+    const orderData=await squareSoftwareRequest(env,'/orders',{
+      idempotency_key:crypto.randomUUID(),
+      order:{
+        location_id:cfg.location,
+        reference_id:orderId,
+        line_items:[{name:product.name,quantity:'1',base_price_money:{amount:product.price_cents,currency:product.currency}}]
+      }
+    });
+    const squareOrder=orderData.order;
+    if(!squareOrder?.id)throw Object.assign(new Error('Square order could not be created.'),{status:502});
+    const paymentData=await squareSoftwareRequest(env,'/payments',{
+      idempotency_key:crypto.randomUUID(),
+      amount_money:{amount:product.price_cents,currency:product.currency},
+      source_id:sourceId,
+      order_id:squareOrder.id,
+      location_id:cfg.location,
+      reference_id:orderId,
+      buyer_email_address:email,
+      note:'OneArtistHub '+product.name+' '+orderId,
+      verification_token:verificationToken||undefined
+    });
+    const payment=paymentData.payment;
+    if(!payment?.id)throw Object.assign(new Error('Square did not return a payment.'),{status:502});
+    const status=clean(payment.status,40).toUpperCase();
+    const mapped=status==='COMPLETED'?'paid':status==='FAILED'?'failed':status==='CANCELED'?'canceled':'pending';
+    await db.prepare('UPDATE orders SET square_order_id=?,square_payment_id=?,payment_status=?,updated_at=? WHERE id=?').bind(squareOrder.id,payment.id,mapped,new Date().toISOString(),orderId).run();
+    if(mapped==='paid'){try{await createOrderEmail(env,{id:orderId,product_id:product.id,customer_email:email,payment_status:mapped})}catch{}}
+    return secureJson({ok:true,order_id:orderId,payment_status:mapped,payment_id:payment.id},201);
+  }catch(error){
+    await db.prepare("UPDATE orders SET payment_status='failed',updated_at=? WHERE id=?").bind(new Date().toISOString(),orderId).run();
+    throw error;
+  }
+}
+
 async function handleSoftwareCheckout(env,body,req){
   if(await publicRateLimited(env,req,'checkout',10,3600))return secureJson({ok:false,error:'Too many checkout attempts. Please try again later.'},429);
   const db=await d1Required(env),slug=clean(body.product,64),name=clean(body.customer_name,120),email=clean(body.customer_email,254).toLowerCase();
@@ -355,9 +441,11 @@ export default {async scheduled(event,env){await squareRefreshAll(env)},async fe
     const url=new URL(req.url),origin=req.headers.get('origin')||WEB_ORIGIN;
     if(req.method==='OPTIONS'&&origin===WEB_ORIGIN)return new Response(null,{status:204,headers:{...corsHeaders(origin),'access-control-max-age':'86400','x-content-type-options':'nosniff'}});
     if(req.method==='GET'&&url.pathname==='/software/products')return secureJson({ok:true,products:await publicProducts(env)},200,origin);
+    if(req.method==='GET'&&url.pathname==='/software/config'){const cfg=await squareSoftwareConfig(env);return secureJson({ok:true,application_id:cfg.applicationId,location_id:cfg.location,environment:env.SQUARE_ENV==='sandbox'?'sandbox':'production'},200,origin);}
     if(req.method==='POST'&&url.pathname==='/software/webhook')return handleSoftwareWebhook(env,req);
     let requestBody={};
     if((req.method==='POST'||req.method==='PATCH')&&JSON_POST_ROUTES.has(url.pathname)){try{requestBody=await req.json()}catch{return secureJson({ok:false,error:'Invalid JSON request body.'},400,origin)}}
+    if(req.method==='POST'&&url.pathname==='/software/payment')return handleSoftwarePayment(env,requestBody,req);
     if(req.method==='POST'&&url.pathname==='/software/checkout')return handleSoftwareCheckout(env,requestBody,req);
     if(req.method==='POST'&&url.pathname==='/software/contact')return handleContact(env,requestBody,req);
     if(req.method==='POST'&&url.pathname==='/admin/login')return adminLogin(env,req,requestBody);
