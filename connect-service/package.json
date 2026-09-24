@@ -6,7 +6,8 @@
   "scripts": {
     "deploy": "wrangler deploy",
     "validate": "wrangler deploy --dry-run",
-    "test": "node --test test/paypal-worker.test.mjs"
+    "test": "node --test test/paypal-worker.test.mjs",
+    "admin:hash": "node scripts/hash-admin-password.mjs"
   },
   "devDependencies": {
     "wrangler": "4.133.0"
