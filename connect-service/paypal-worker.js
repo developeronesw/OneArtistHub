@@ -162,174 +162,7 @@ async function pbkdf2Password(password,salt,iterations){
   return bytesToB64url(new Uint8Array(await crypto.subtle.deriveBits({name:'PBKDF2',salt,iterations,hash:'SHA-256'},key,256)));
 }
 async function verifyAdminPassword(password,stored){
-  const parts=String(stored||'').split('\\n');
-  try{
-    const url=new URL(req.url);
-    const origin=req.headers.get('origin')||WEB_ORIGIN;
-    let requestBody={};
-    if((req.method==='POST'||req.method==='PATCH')&&url.pathname!=='/software/webhook'&&JSON_POST_ROUTES.has(url.pathname)){try{requestBody=await req.json()}catch{return secureJson({ok:false,error:'Invalid JSON request body.'},400,origin)}}
-    if(req.method==='OPTIONS' && origin===WEB_ORIGIN){return new Response(null,{status:204,headers:{...corsHeaders(origin),'access-control-max-age':'86400','x-content-type-options':'nosniff'}})}
-    if(url.pathname==='/software/products'&&req.method==='GET')return secureJson({ok:true,products:await publicProducts(env)},200,origin);
-    if(url.pathname==='/software/checkout'&&req.method==='POST')return handleSoftwareCheckout(env,requestBody);
-    if(url.pathname==='/software/contact'&&req.method==='POST')return handleContact(env,requestBody);
-    if(url.pathname==='/software/webhook'&&req.method==='POST')return handleSoftwareWebhook(env,req);
-    if(url.pathname==='/admin/login'&&req.method==='POST')return adminLogin(env,req,requestBody);
-    if(url.pathname==='/admin/logout'&&req.method==='POST')return adminLogout(env,req);
-    if(url.pathname==='/admin/me'&&req.method==='GET'){const s=await adminSession(env,req);return adminJson(env,req,s?{ok:true,email:s.email,csrf:s.csrf}:{ok:false},s?200:401)}
-    if(url.pathname==='/admin/overview'&&req.method==='GET'){if(!await requireAdmin(env,req))return adminJson(env,req,{ok:false,error:'Unauthorized'},401);return adminOverview(env,req)}
-    if(url.pathname==='/admin/products'&&req.method==='PATCH'){if(!await requireAdmin(env,req))return adminJson(env,req,{ok:false,error:'Unauthorized'},401);return adminProductUpdate(env,req,requestBody)}
-    if(url.pathname==='/admin/settings/email'&&req.method==='POST'){if(!await requireAdmin(env,req))return adminJson(env,req,{ok:false,error:'Unauthorized'},401);return adminEmailUpdate(env,req,requestBody)}
-    if(url.pathname==='/admin/email/test'&&req.method==='POST'){
-      if(!await requireAdmin(env,req))return adminJson(env,req,{ok:false,error:'Unauthorized'},401);
-      const to=await setting(env,'contact_to','');if(!to)return adminJson(env,req,{ok:false,error:'Set a contact email first.'},400);
-      const from=await setting(env,'email_from','contact@oneartisthub.site');await sendEmail(env,{to,from,subject:'OneArtistHub Email Service test',text:'Your Cloudflare Email Service binding is working.',html:'<h2>OneArtistHub Email Service is working.</h2><p>This message was sent by the OneArtistHub Connect Worker.</p>'});return adminJson(env,req,{ok:true});
-    }
-    if(url.pathname==='/admin/square/status'&&req.method==='GET'){
-      if(!await requireAdmin(env,req))return adminJson(env,req,{ok:false,error:'Unauthorized'},401);
-      let connected=false,merchant='';
-      if(env.SOFTWARE_SQUARE_ACCESS_TOKEN&&env.SOFTWARE_SQUARE_LOCATION_ID){try{const cfg=await squareSoftwareConfig(env);const r=await fetch(cfg.base+'/v2/locations/'+encodeURIComponent(cfg.location),{headers:{authorization:'Bearer '+cfg.token,'Square-Version':'2026-09-16'}});connected=r.ok;merchant=connected?'configured':'';}catch{}}
-      return adminJson(env,req,{ok:true,configured:!!env.SOFTWARE_SQUARE_ACCESS_TOKEN,locationConfigured:!!env.SOFTWARE_SQUARE_LOCATION_ID,connected,merchant,environment:env.SQUARE_ENV==='sandbox'?'sandbox':'production',webhookConfigured:!!env.SOFTWARE_SQUARE_WEBHOOK_SIGNATURE_KEY});
-    }
-    if(url.pathname==='/admin/overview'&&req.method==='GET')return adminJson(env,req,{ok:false,error:'Unauthorized'},401);
-    if(url.pathname==='/health')return json({ok:true,service:'OneArtist Connect',paypalEnvironment:env.PAYPAL_ENV==='live'?'live':'sandbox',squareEnvironment:env.SQUARE_ENV==='sandbox'?'sandbox':'production',squareConfigured:!!(env.SQUARE_CLIENT_ID&&env.SQUARE_CLIENT_SECRET)});
-    if(req.method==='POST'&&url.pathname==='/paypal/webhook')return receiveWebhook(req,env);
-    if(req.method==='POST'&&url.pathname==='/installations/register'){
-      const id=clean(requestBody.installationId,64),route=validRoute(clean(requestBody.url,1000));
-      if(!validInstallationId(id)||!route)return json({ok:false,error:'A valid installationId and HTTPS callback URL are required.'},400);
-      if(!(await consumeActivation(env,id,route,bearer(req))))return json({ok:false,error:'Unauthorized registration.'},401);
-      const result=await registerInstallation(env,{installationId:id,url:route});await registry(env).delete(activationKey(id));return json({ok:true,...result},201);
-    }
-    if(req.method==='POST'&&url.pathname==='/installations/activate'){
-      if(!env.CONNECT_SHARED_SECRET||bearer(req)!==env.CONNECT_SHARED_SECRET)return json({ok:false,error:'Unauthorized activation.'},401);
-      const result=await createActivation(env,{installationId:clean(requestBody.installationId,64),url:clean(requestBody.url,1000),bootstrapHash:clean(requestBody.bootstrapHash,128)});return json({ok:true},result.reused?200:201);
-    }
-    if(req.method==='POST'&&url.pathname==='/installations/revoke'){
-      const token=bearer(req),record=await registryByToken(env,token),id=clean(requestBody.installationId,64);
-      if(!record||record.installationId!==id)return json({ok:false,error:'Unauthorized installation revocation.'},403);
-      await revokeInstallation(env,id);return json({ok:true});
-    }
-    if(req.method==='POST'&&url.pathname==='/onboard/start'){
-      if(!(await installationAuthorized(req,env)))return json({ok:false,error:'Unauthorized installation.'},401);
-      const installation=await registryByToken(env,bearer(req));
-      if(installation?.squareConnected)return json({ok:false,error:'Disconnect Square before connecting PayPal.'},409);
-      const b=requestBody,trackingId=clean(b.trackingId,120),returnUrl=clean(b.returnUrl,1000);
-      if(!trackingId||!/^https:\/\//i.test(returnUrl))return json({ok:false,error:'trackingId and HTTPS returnUrl are required.'},400);
-      const attribution=partnerAttribution(env),pp=await paypalAccess(env);
-      const payload={tracking_id:trackingId,partner_config_override:{return_url:returnUrl,return_url_description:'Return to OneArtist Hub'},operations:[{operation:'API_INTEGRATION',api_integration_preference:{rest_api_integration:{integration_method:'PAYPAL',integration_type:'THIRD_PARTY',third_party_details:{features:['PAYMENT','REFUND']}}}}],products:['EXPRESS_CHECKOUT'],legal_consents:[{type:'SHARE_DATA_CONSENT',granted:true}]};
-      const headers={authorization:`Bearer ${pp.token}`,'content-type':'application/json','PayPal-Partner-Attribution-Id':attribution};
-      const r=await fetch(pp.base+'/v2/customer/partner-referrals',{method:'POST',headers,body:JSON.stringify(payload)});const j=await r.json();if(!r.ok)return json({ok:false,error:clean(j.message||'PayPal partner referral failed.',500),details:j.details||[]},r.status);
-      const actionUrl=(j.links||[]).find(x=>x.rel==='action_url')?.href,self=(j.links||[]).find(x=>x.rel==='self')?.href;if(!actionUrl)return json({ok:false,error:'PayPal did not return an onboarding URL.'},502);
-      return json({ok:true,actionUrl,self,trackingId:await pendingTrackingProof(bearer(req),trackingId)},201);
-    }
-    if(req.method==='POST'&&url.pathname==='/square/connect/start'){
-      const installation=await registryByToken(env,bearer(req));
-      if(!installation||!installation.active)return json({ok:false,error:'Unauthorized installation.'},401);
-      if(installation.merchantId)return json({ok:false,error:'Disconnect PayPal before connecting Square.'},409);
-      const b=requestBody,returnUrl=clean(b.returnUrl,1000);
-      if(!/^https:\/\//i.test(returnUrl))return json({ok:false,error:'HTTPS returnUrl is required.'},400);
-      const cfg=await squareConfig(env);
-      const state=bytesToB64url(crypto.getRandomValues(new Uint8Array(32)));
-      const kv=registry(env);if(!kv)throw configurationError('CONNECT_INSTALLATIONS KV binding is not configured.');
-      await kv.put(squareOAuthKey(state),JSON.stringify({installationId:installation.installationId,returnUrl,createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+10*60*1000).toISOString()}),{expirationTtl:600});
-      const scope=['MERCHANT_PROFILE_READ','PAYMENTS_READ','PAYMENTS_WRITE','ORDERS_READ','ORDERS_WRITE'].join(' ');
-      const authUrl=new URL(cfg.base+'/oauth2/authorize');authUrl.searchParams.set('client_id',cfg.clientId);authUrl.searchParams.set('scope',scope);authUrl.searchParams.set('session','false');authUrl.searchParams.set('state',state);authUrl.searchParams.set('redirect_uri',cfg.redirect);
-      return json({ok:true,actionUrl:authUrl.toString()});
-    }
-    if(req.method==='GET'&&url.pathname==='/square/oauth/callback'){
-      const cfg=await squareConfig(env),state=clean(url.searchParams.get('state'),200),code=clean(url.searchParams.get('code'),2048),denied=clean(url.searchParams.get('error'),100);
-      const kv=registry(env);let pending=null;try{pending=state?await kv.get(squareOAuthKey(state),'json'):null}catch{}
-      if(!pending||new Date(pending.expiresAt)<=new Date())return new Response('Square authorization expired. Please reconnect.',{status:400,headers:{'content-type':'text/plain'}});
-      await kv.delete(squareOAuthKey(state));
-      if(denied||!code)return Response.redirect(pending.returnUrl+'?square=denied',302);
-      const tokenResponse=await fetch(cfg.base+'/oauth2/token',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({client_id:cfg.clientId,client_secret:cfg.clientSecret,code,grant_type:'authorization_code',redirect_uri:cfg.redirect})});
-      let token={};try{token=await tokenResponse.json()}catch{}
-      if(!tokenResponse.ok||!token.access_token||!token.refresh_token)return new Response('Square authorization could not be completed.',{status:400,headers:{'content-type':'text/plain'}});
-      const record=await registryInstallation(env,pending.installationId);if(!record?.active)return new Response('OneArtist installation is not active.',{status:409,headers:{'content-type':'text/plain'}});
-      if(record.merchantId)return new Response('PayPal is already connected. Disconnect PayPal before using Square.',{status:409,headers:{'content-type':'text/plain'}});
-      const locationsResponse=await fetch(cfg.base+'/v2/locations',{headers:{authorization:'Bearer '+token.access_token,'Square-Version':'2026-09-16'}});
-      let locations={};try{locations=await locationsResponse.json()}catch{}
-      const location=(locations.locations||[]).find(x=>x.status==='ACTIVE')||(locations.locations||[])[0];
-      if(!location?.id)return new Response('Square connected, but no active Square location was returned.',{status:400,headers:{'content-type':'text/plain'}});
-      await saveSquareConnection(env,pending.installationId,{accessToken:token.access_token,refreshToken:token.refresh_token,expiresAt:token.expires_at||'',merchantId:token.merchant_id||'',locationId:location.id,locationName:location.name||'',scopes:token.scopes||[],updatedAt:new Date().toISOString(),connectedAt:new Date().toISOString()});
-      record.squareConnected=true;record.squareMerchantId=clean(token.merchant_id,191);record.squareLocationId=clean(location.id,64);record.updatedAt=new Date().toISOString();await putRegistryInstallation(env,record);
-      return Response.redirect(pending.returnUrl+'?square=connected',302);
-    }
-    if(req.method==='GET'&&url.pathname==='/square/status'){
-      const installation=await registryByToken(env,bearer(req));if(!installation||!installation.active)return json({ok:false,error:'Unauthorized installation.'},401);
-      const connection=await squareConnection(env,installation.installationId);
-      if(!connection)return json({ok:true,configured:!!env.SQUARE_CLIENT_ID,status:'not_connected',merchantId:'',locationId:'',environment:env.SQUARE_ENV==='sandbox'?'sandbox':'production'});
-      try{await squareApi(env,installation.installationId,'/locations');}catch(e){return json({ok:true,configured:true,status:'action_required',merchantId:connection.merchantId||'',locationId:connection.locationId||'',environment:env.SQUARE_ENV==='sandbox'?'sandbox':'production',error:clean(e.message,300)});}
-      return json({ok:true,configured:true,status:'connected',merchantId:connection.merchantId||'',locationId:connection.locationId||'',locationName:connection.locationName||'',environment:env.SQUARE_ENV==='sandbox'?'sandbox':'production'});
-    }
-    if(req.method==='POST'&&url.pathname==='/square/disconnect'){
-      const installation=await registryByToken(env,bearer(req));if(!installation||!installation.active)return json({ok:false,error:'Unauthorized installation.'},401);
-      const connection=await squareConnection(env,installation.installationId);if(connection){
-        const cfg=await squareConfig(env);
-        try{await fetch(cfg.base+'/oauth2/revoke',{method:'POST',headers:{authorization:'Client '+cfg.clientSecret,'content-type':'application/json'},body:JSON.stringify({client_id:cfg.clientId,access_token:connection.accessToken,revoke_only_access_token:false})})}catch{}
-      }
-      await clearSquareConnection(env,installation.installationId);
-      installation.squareConnected=false;installation.squareMerchantId='';installation.squareLocationId='';installation.updatedAt=new Date().toISOString();await putRegistryInstallation(env,installation);
-      return json({ok:true});
-    }
-    if(req.method==='POST'&&url.pathname==='/square/checkout'){
-      const installation=await registryByToken(env,bearer(req));if(!installation||!installation.active)return json({ok:false,error:'Unauthorized installation.'},401);
-      if(installation.merchantId)return json({ok:false,error:'PayPal is connected. Disconnect PayPal before using Square.'},409);
-      const connection=await squareConnection(env,installation.installationId);if(!connection)return json({ok:false,error:'Square is not connected.'},409);
-      const b=requestBody,body=b.body||{},data=await squareApi(env,installation.installationId,'/online-checkout/payment-links',{method:'POST',body});
-      return json({ok:true,paymentLink:data.payment_link||null,order:data.related_resources?.orders?.[0]||null});
-    }
-    if(req.method==='POST'&&url.pathname==='/square/order'){
-      const installation=await registryByToken(env,bearer(req));if(!installation||!installation.active)return json({ok:false,error:'Unauthorized installation.'},401);
-      const orderId=clean(requestBody.orderId,192);if(!orderId)return json({ok:false,error:'Missing Square order ID.'},400);
-      const data=await squareApi(env,installation.installationId,'/orders/'+encodeURIComponent(orderId));
-      return json({ok:true,order:data.order||null});
-    }
-    if(req.method==='POST'&&url.pathname==='/onboard/status'){
-      if(!(await installationAuthorized(req,env)))return json({ok:false,error:'Unauthorized installation.'},401);
-      const b=requestBody,merchantId=clean(b.merchantId,40),trackingId=clean(b.trackingId,120);
-      if(!merchantId||!trackingId||!env.PAYPAL_PARTNER_ID)return json({ok:false,error:'merchantId, trackingId and PAYPAL_PARTNER_ID are required.'},400);
-      const pendingTracking=await verifyPendingTracking(bearer(req),trackingId);if(!pendingTracking)return json({ok:false,error:'Unauthorized or invalid pending onboarding.'},403);
-      const pp=await paypalJson(env,`/v1/customer/partners/${encodeURIComponent(env.PAYPAL_PARTNER_ID)}/merchant-integrations/${encodeURIComponent(merchantId)}`,{});
-      if(!pp.ok)return json({ok:false,error:clean(pp.data.message||'Unable to verify merchant onboarding.',500)},pp.status);
-      const j=pp.data;if(j.tracking_id!==pendingTracking)return json({ok:false,error:'PayPal merchant does not belong to this pending onboarding.'},403);const confirmedMerchant=clean(j.merchant_id||merchantId,40);if(registry(env)&&!(await associateMerchant(env,bearer(req),confirmedMerchant)))return json({ok:false,error:'PayPal merchant is already associated with another installation.'},409);return json({ok:true,merchantId:confirmedMerchant,trackingId:j.tracking_id,paymentsReceivable:!!j.payments_receivable,primaryEmailConfirmed:!!j.primary_email_confirmed,products:j.products||[],oauthIntegrations:j.oauth_integrations||[]});
-    }
-    if(!(await authorized(req,env)))return json({ok:false,error:'Unauthorized'},401);
-    if(req.method==='GET'&&url.pathname==='/config'){partnerAttribution(env);const pp=await paypalAccess(env);return json({ok:true,clientId:clean(env.PAYPAL_PARTNER_CLIENT_ID,255),environment:env.PAYPAL_ENV==='live'?'live':'sandbox',webhookConfigured:!!(env.PAYPAL_WEBHOOK_ID_LIVE||env.PAYPAL_WEBHOOK_ID_SANDBOX||env.PAYPAL_WEBHOOK_ID),authenticated:!!pp.token});}
-    if(req.method==='POST'&&url.pathname==='/paypal/create-order'){
-      const b=requestBody,merchantId=clean(b.merchantId,40),payload=b.payload||{};
-      if(!merchantId||!Array.isArray(payload.purchase_units)||!payload.purchase_units.length)return json({ok:false,error:'merchantId and a valid order payload are required.'},400);
-      if(!(await authorizedForMerchant(req,env,merchantId)))return json({ok:false,error:'Unauthorized merchant.'},403);
-      if(payload.purchase_units.some(unit=>unit?.payment_instruction&&Object.prototype.hasOwnProperty.call(unit.payment_instruction,'platform_fees')))return json({ok:false,error:'Platform fees are not supported.'},400);
-      payload.purchase_units=payload.purchase_units.map(u=>({...u,payee:{...(u.payee||{}),merchant_id:merchantId},payment_instruction:{...(u.payment_instruction||{}),disbursement_mode:'INSTANT'}}));
-      const r=await paypalJson(env,'/v2/checkout/orders',{method:'POST',merchantId,body:payload,requestId:b.requestId});
-      if(!r.ok||!r.data?.id)return json({ok:false,error:clean(r.data.message||'PayPal order creation failed.',500),details:r.data.details||[]},r.status||502);
-      return json({ok:true,order:r.data},201);
-    }
-    if(req.method==='POST'&&url.pathname==='/paypal/order'){
-      const b=requestBody,merchantId=clean(b.merchantId,40),orderId=clean(b.orderId,80);if(!merchantId||!orderId)return json({ok:false,error:'merchantId and orderId are required.'},400);
-      if(!(await authorizedForMerchant(req,env,merchantId)))return json({ok:false,error:'Unauthorized merchant.'},403);
-      const r=await paypalJson(env,`/v2/checkout/orders/${encodeURIComponent(orderId)}`,{merchantId});if(!r.ok)return json({ok:false,error:clean(r.data.message||'PayPal order lookup failed.',500)},r.status||502);return json({ok:true,order:r.data});
-    }
-    if(req.method==='POST'&&url.pathname==='/paypal/capture'){
-      const b=requestBody,merchantId=clean(b.merchantId,40),orderId=clean(b.orderId,80);if(!merchantId||!orderId)return json({ok:false,error:'merchantId and orderId are required.'},400);
-      if(!(await authorizedForMerchant(req,env,merchantId)))return json({ok:false,error:'Unauthorized merchant.'},403);
-      const r=await paypalJson(env,`/v2/checkout/orders/${encodeURIComponent(orderId)}/capture`,{method:'POST',merchantId,body:{},requestId:b.requestId});if(!r.ok)return json({ok:false,error:clean(r.data.message||'PayPal capture failed.',500),details:r.data.details||[]},r.status||502);return json({ok:true,order:r.data});
-    }
-    if(req.method==='POST'&&url.pathname==='/paypal/refund'){
-      const b=requestBody,merchantId=clean(b.merchantId,40),captureId=clean(b.captureId,80);if(!merchantId||!captureId)return json({ok:false,error:'merchantId and captureId are required.'},400);
-      if(!(await authorizedForMerchant(req,env,merchantId)))return json({ok:false,error:'Unauthorized merchant.'},403);
-      const r=await paypalJson(env,`/v2/payments/captures/${encodeURIComponent(captureId)}/refund`,{method:'POST',merchantId,body:b.payload||{},requestId:b.requestId});if(!r.ok||!['COMPLETED','PENDING'].includes(String(r.data.status||'').toUpperCase()))return json({ok:false,error:clean(r.data.message||'PayPal refund failed.',500),details:r.data.details||[]},r.status||502);return json({ok:true,refund:r.data});
-    }
-    if(req.method==='POST'&&url.pathname==='/paypal/webhook/verify'){
-      const b=requestBody,h=b.headers||{},rawBody=String(b.rawBody||'');if(!rawBody||!h.auth_algo||!h.cert_url||!h.transmission_id||!h.transmission_sig||!h.transmission_time)return json({ok:false,error:'PayPal webhook verification data is incomplete.'},400);let webhookEvent={};try{webhookEvent=JSON.parse(rawBody)}catch{return json({ok:false,error:'PayPal webhook body is invalid JSON.'},400);}
-      const webhookId=env.PAYPAL_ENV==='live'?(env.PAYPAL_WEBHOOK_ID_LIVE||env.PAYPAL_WEBHOOK_ID):(env.PAYPAL_WEBHOOK_ID_SANDBOX||env.PAYPAL_WEBHOOK_ID);if(!webhookId)return json({ok:false,error:'PayPal webhook ID is not configured on the Connect worker.'},503);
-      const pp=await paypalAccess(env),prefix=JSON.stringify({auth_algo:h.auth_algo,cert_url:h.cert_url,transmission_id:h.transmission_id,transmission_sig:h.transmission_sig,transmission_time:h.transmission_time,webhook_id:webhookId}),verifyBody=prefix.slice(0,-1)+`,"webhook_event":${rawBody}}`;
-      const r=await fetch(pp.base+'/v1/notifications/verify-webhook-signature',{method:'POST',headers:{authorization:`Bearer ${pp.token}`,'content-type':'application/json'},body:verifyBody});let j={};try{j=await r.json()}catch{}if(!r.ok)return json({ok:false,error:clean(j.message||'PayPal webhook verification failed.',500)},r.status);return json({ok:true,verified:j.verification_status==='SUCCESS',status:j.verification_status||''});
-    }
-    return json({ok:false,error:'Not found'},404);
-  }catch(e){return json({ok:false,error:clean(e?.message||e,500)},Number(e?.status)||500)}
-}}
-);
+  const parts=String(stored||'').split('\\$');
   if(parts.length!==4||parts[0]!=='pbkdf2')return false;
   const iterations=Number(parts[1]);if(!Number.isSafeInteger(iterations)||iterations<100000||iterations>1000000)return false;
   try{
@@ -339,11 +172,13 @@ async function verifyAdminPassword(password,stored){
 }
 async function adminSession(env,req){
   const token=cookieValue(req,'oah_admin');if(!token||!registry(env))return null;
-  const hash=await adminHash(token);try{const s=await registry(env).get('admin-session:'+hash,'json');if(!s||s.expiresAt<Date.now())return null;return s}catch{return null}
+  const hash=await adminHash(token);try{const session=await registry(env).get('admin-session:'+hash,'json');if(!session||session.expiresAt<Date.now())return null;return session}catch{return null}
 }
 async function requireAdmin(env,req){
   const session=await adminSession(env,req);if(!session)return null;
-  const csrf=req.headers.get('x-csrf-token')||'';if(['POST','PATCH','PUT','DELETE'].includes(req.method)&&csrf!==session.csrf)return null;
+  if(['POST','PATCH','PUT','DELETE'].includes(req.method)){
+    const csrf=req.headers.get('x-csrf-token')||'';if(csrf!==session.csrf)return null;
+  }
   return session;
 }
 async function d1Required(env){const db=COMMERCE_DB(env);if(!db)throw configurationError('Commerce D1 database binding COMMERCE_DB is not configured.');return db}
