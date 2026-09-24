@@ -150,7 +150,7 @@ function secureJson(data,status=200,origin=WEB_ORIGIN){
   const h={'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff','referrer-policy':'no-referrer','x-frame-options':'DENY','content-security-policy':"default-src 'none'; frame-ancestors 'none'",...corsHeaders(origin)};
   return new Response(JSON.stringify(data),{status,headers:h});
 }
-function validEmail(value){return /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(String(value||''))&&String(value).length<=254}
+function validEmail(value){return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value||''))&&String(value).length<=254}
 function adminSessionCookie(token){
   return 'oah_admin='+encodeURIComponent(token)+'; Path=/; Max-Age='+ADMIN_SESSION_TTL+'; HttpOnly; Secure; SameSite=Strict';
 }
