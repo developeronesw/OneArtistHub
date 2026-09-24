@@ -248,7 +248,14 @@ async function handleSoftwarePayment(env,body,req){
   const product=await db.prepare('SELECT * FROM products WHERE slug=? AND active=1').bind(slug).first();
   if(!product)return secureJson({ok:false,error:'Product is unavailable.'},404);
   if(product.billing_type==='yearly'&&!clean(product.square_subscription_plan_variation_id,192))return secureJson({ok:false,error:'Hosted subscription is not configured yet. Please contact support.'},503);
-  const orderId='OAH-'+crypto.randomUUID().replace(/-/g,'').slice(0,20).toUpperCase(),now=new Date().toISOString();
+  const suppliedRequestId=clean(body.request_id,45),requestId=/^[A-Za-z0-9_-]{16,45}$/.test(suppliedRequestId)?suppliedRequestId:crypto.randomUUID(),orderId='OAH-'+requestId.replace(/[^A-Za-z0-9]/g,'').slice(0,36).toUpperCase(),now=new Date().toISOString();
+  const existing=await db.prepare('SELECT * FROM orders WHERE id=?').bind(orderId).first();
+  if(existing){
+    if(existing.product_id!==product.id||existing.customer_email!==email)return secureJson({ok:false,error:'This checkout request is already associated with another order.'},409);
+    if(existing.payment_status==='paid')return secureJson({ok:true,order_id:existing.id,payment_status:'paid',payment_id:existing.square_payment_id||'',subscription_status:String(existing.subscription_status||'').toLowerCase(),subscription_id:existing.square_subscription_id||''},200);
+    if(existing.payment_status==='pending')return secureJson({ok:true,order_id:existing.id,payment_status:'pending',payment_id:existing.square_payment_id||'',subscription_status:String(existing.subscription_status||'').toLowerCase(),subscription_id:existing.square_subscription_id||''},200);
+    return secureJson({ok:false,error:'The previous checkout attempt did not complete. Please submit the payment again.'},409);
+  }
   await db.prepare('INSERT INTO orders(id,customer_name,customer_email,product_id,product_name,product_version,amount_cents,currency,payment_status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)').bind(orderId,name,email,product.id,product.name,product.version,product.price_cents,product.currency,'pending',now,now).run();
   try{
     const cfg=await squareSoftwareConfig(env);
