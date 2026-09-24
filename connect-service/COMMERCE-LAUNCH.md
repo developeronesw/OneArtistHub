@@ -36,15 +36,15 @@ Set in Cloudflare:
 - Variable: SQUARE_ENV=production
 - Secret: SOFTWARE_SQUARE_WEBHOOK_SIGNATURE_KEY
 
-The browser never receives these values.
+The browser never receives these values. The Web Payments SDK itself is loaded from Square's production CDN and only receives the public Application ID and Location ID.
 
-The Worker creates Square-hosted Payment Links using the D1 price. Square requires ORDERS_READ, ORDERS_WRITE, and PAYMENTS_WRITE for Create Payment Link.
+The storefront now uses the Square Web Payments SDK for an on-site card form. The browser receives only the public Application ID and Location ID; the Worker keeps the Square access token server-side and calls Payments API, Customers API, Cards API, and Subscriptions API as needed. The D1 product price is authoritative, so the browser cannot change the amount. The legacy /software/checkout Payment Link endpoint remains available as a fallback and is not used by the storefront.
 
 Webhook URL:
 
 https://connect.oneartisthub.site/software/webhook
 
-Subscribe the Square application to payment events used by the store, especially payment.created and payment.updated.
+Subscribe the Square application to payment events used by the store: payment.created, payment.updated, subscription.created, subscription.updated, invoice.payment_made, and invoice.scheduled_charge_failed.
 
 ## 4. Cloudflare Email Service
 
@@ -89,3 +89,10 @@ Do not combine this repository with the downloadable OneArtistHub application.
 - Square webhooks are verified using HMAC-SHA256 before changing order status.
 - Product prices are read server-side from D1.
 - No card data is stored.
+
+
+## 5. Embedded checkout architecture
+
+The production storefront at https://www.oneartisthub.site uses Square Web Payments SDK directly in the checkout modal. Card data is entered into Square's secure hosted card element and tokenized in the browser; raw card data never reaches OneArtistHub. Self-Hosted uses Payments API + Orders API. Hosted creates a Square customer, stores the tokenized card on file, and creates the annual subscription through Square's Subscriptions API. This prevents the hosted plan from charging the customer twice.
+
+The public storefront endpoint https://connect.oneartisthub.site/software/config exposes only the Square Application ID, Location ID, and environment. No access token or secret is exposed.
