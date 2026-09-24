@@ -91,7 +91,7 @@ Do not combine this repository with the downloadable OneArtistHub application.
 - No card data is stored.
 
 
-## 5. Embedded checkout architecture
+## 6. Embedded checkout architecture
 
 The production storefront at https://www.oneartisthub.site uses Square Web Payments SDK directly in the checkout modal. Card data is entered into Square's secure hosted card element and tokenized in the browser; raw card data never reaches OneArtistHub. Self-Hosted uses Payments API + Orders API. Hosted creates a Square customer, stores the tokenized card on file, and creates the annual subscription through Square's Subscriptions API. This prevents the hosted plan from charging the customer twice.
 
